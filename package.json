@@ -1,6 +1,6 @@
 {
   "name": "hey-agent-app",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "MIT",
   "description": "A native Omarchy desktop client for HEY and the user's Pi agent.",
