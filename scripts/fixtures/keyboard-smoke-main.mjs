@@ -1,0 +1,101 @@
+import assert from "node:assert/strict";
+import { app, BrowserWindow } from "electron";
+import { checkMailboxVisits } from "./mailbox-visits-smoke.mjs";
+import { checkDraftReview } from "./draft-review-smoke.mjs";
+import { checkAgentHandoff } from "./agent-handoff-smoke.mjs";
+const url = process.env.HEY_KEYBOARD_PREVIEW_URL;
+if (!url?.startsWith("http://127.0.0.1:") || !process.env.XDG_CONFIG_HOME?.includes("/hey-keyboard-smoke-")) throw new Error("Disposable preview required.");
+app.whenReady().then(async () => {
+  const window = new BrowserWindow({ show: false, width: 1500, height: 980, webPreferences: { backgroundThrottling: false } });
+  const evaluate = (code) => window.webContents.executeJavaScript(code);
+  const until = async (code) => {
+    for (let i = 0; i < 120; i++) { if (await evaluate(code)) return; await new Promise((resolve) => setTimeout(resolve, 30)); }
+    throw new Error(`Timed out: ${code}`);
+  };
+  const click = async (selector) => { await evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`); };
+  const fill = async (selector, value) => {
+    await evaluate(`(() => { const node=document.querySelector(${JSON.stringify(selector)}); node.focus(); Object.getOwnPropertyDescriptor(node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(node, ${JSON.stringify(value)}); node.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  };
+  const press = async (keyCode, modifiers = [], repeat = false) => {
+    // Hidden Electron windows do not receive OS input. Exercise DOM dispatch here;
+    // native Tab/default browser behavior is additionally checked in visible preview.
+    const params = { key: keyCode, repeat, ctrlKey: modifiers.includes("control"), shiftKey: modifiers.includes("shift"), altKey: modifiers.includes("alt"), metaKey: modifiers.includes("meta"), bubbles: true, cancelable: true };
+    await evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', ${JSON.stringify(params)}))`);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  };
+  try {
+    await window.loadURL(url);
+    await until("Boolean(window.heyAgent && document.querySelector('[data-tooltip=\"Compose a message\"]'))");
+    // Chromium suspends animation frames in hidden windows; retain deferred focus.
+    await evaluate("window.requestAnimationFrame=callback=>setTimeout(()=>callback(performance.now()),0);window.cancelAnimationFrame=clearTimeout;true");
+    await evaluate("window.keyTrace=[];document.addEventListener('keydown',e=>window.keyTrace.push({key:e.key,ctrl:e.ctrlKey,meta:e.metaKey,repeat:e.repeat,code:e.keyCode,target:e.target.tagName}),true); true");
+    await evaluate(`window.proof={sends:[],writes:[]}; const send=window.heyAgent.mail.send; window.heyAgent.mail.send=async r=>{window.proof.sends.push(r);return send(r)}; const generate=window.heyAgent.writing.generate; window.heyAgent.writing.generate=async r=>{window.proof.writes.push(r);return generate(r)}; true;`);
+    await until("document.querySelectorAll('.mail-row').length>=4");
+    await evaluate("document.activeElement.blur()");
+    const rows = await evaluate("[...document.querySelectorAll('.mail-row')].map(n=>n.dataset.postingId)");
+    await press("j");
+    const moved = await evaluate("document.querySelector('.mail-row[data-selected=true]').dataset.postingId");
+    await press("j", [], true);
+    assert.equal(await evaluate("document.querySelector('.mail-row[data-selected=true]').dataset.postingId"), rows[rows.indexOf(moved) + 1]);
+    await press("K", ["shift"]);
+    assert.equal(await evaluate("document.querySelectorAll('.mail-row[data-bulk-selected=true]').length"), 2);
+    await press("J", ["shift"], true);
+    assert.equal(await evaluate("document.querySelectorAll('.mail-row[data-bulk-selected=true]').length"), 1);
+    await press("Escape");
+    await click('[aria-label="Hide HEY Agent"]');
+    await press("L", ["control", "shift"]);
+    await until("document.activeElement.getAttribute('aria-label')==='Message HEY Agent'");
+    assert.equal(await evaluate("window.proof.sends.length+window.proof.writes.length"), 0);
+    await click('[data-tooltip="Compose a message"]');
+    await until("Boolean(document.querySelector('[aria-label=\"To recipients\"]'))");
+    await fill('[aria-label="To recipients"]', 'test@example.com'); await press("Enter");
+    await fill('[placeholder="Subject"]', 'Synthetic shortcut proof');
+    await fill('[placeholder="Write your message…"]', 'Synthetic draft only.');
+    await press("k", ["control"]);
+    await until("Boolean(document.querySelector('[placeholder=\"Or tell it what to change…\"]'))");
+    await fill('[placeholder="Or tell it what to change…"]', 'Make it clearer'); await press("Enter", ["control"]);
+    await until("window.proof.writes.length===1");
+    assert.equal(await evaluate("window.proof.sends.length"), 0, "AI submission must not send mail");
+    await checkDraftReview({ evaluate, until, click, fill, press });
+    await press("c", ["control", "shift"]);
+    await until("document.activeElement.getAttribute('aria-label')==='Cc recipients'");
+    await press("b", ["control", "shift"]);
+    await until("document.activeElement.getAttribute('aria-label')==='Bcc recipients'");
+    await evaluate(`const body=document.querySelector('[placeholder="Write your message…"]'); body.focus(); for(const flags of [{repeat:true},{isComposing:true},{shiftKey:true},{altKey:true}])body.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,bubbles:true,cancelable:true,...flags}));`);
+    assert.equal(await evaluate("window.proof.sends.length"), 0);
+    await evaluate("document.querySelector('[aria-label=\"Close composer\"]').focus()");
+    await press("Tab", ["shift"]);
+    assert.match(await evaluate("document.activeElement.textContent"), /Send/);
+    await press("Tab");
+    assert.equal(await evaluate("document.activeElement.getAttribute('aria-label')"), "Close composer");
+    await press("s", ["control"]);
+    await until("window.proof.sends.length===1");
+    assert.equal(await evaluate("window.proof.sends[0].saveAsDraft"), true);
+    await click('[aria-label="Profile options"]');
+    await click('[role="menuitem"]');
+    await click('[aria-controls="settings-shortcuts-content"]');
+    await evaluate("[...document.querySelectorAll('.shortcut-profile')].find(n=>n.textContent.includes('Custom')).click()");
+    await until("Boolean(document.querySelector('#shortcut-compose'))");
+    const save = async () => evaluate("document.querySelector('#shortcut-compose').closest('.shortcut-editor-row').querySelector('button').click()");
+    await fill('#shortcut-compose', 'banana'); await save();
+    await until("document.querySelector('#shortcut-compose-error')?.textContent.includes('Unknown key')");
+    await fill('#shortcut-compose', 'x'); await save();
+    await until("document.querySelector('#shortcut-compose-error')?.textContent.includes('conflicts')");
+    await fill('#shortcut-compose', 'ctrl+alt+m'); await save();
+    await until("window.heyAgent.settings.get().then(s=>s.customShortcuts.compose?.[0]==='ctrl+alt+m')");
+    await until("document.querySelector('[data-tooltip=\"Compose a message\"]').dataset.shortcut==='Ctrl+Alt+M'");
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await evaluate("document.querySelector('[data-tooltip=\"Compose a message\"]').focus()");
+    await evaluate("document.querySelector('[data-tooltip=\"Compose a message\"]').dispatchEvent(new FocusEvent('focusin',{bubbles:true}))");
+    await until("document.querySelector('[role=tooltip]')?.textContent.includes('Ctrl+Alt+M')");
+    await press("Escape");
+    assert.equal(await evaluate("Boolean(document.querySelector('[role=tooltip]'))"), false);
+    console.log("Keyboard smoke passed: held navigation, anchored range selection, AI chat focus, nested AI ownership, no accidental sends, Cc/Bcc focus, modal Tab containment, draft save, custom validation and configured focus hints. All boundaries synthetic.");
+    await checkMailboxVisits({ window, evaluate, until, click, fill, press, url });
+    await window.loadURL(url);
+    await until("Boolean(document.querySelector('[aria-label=\"Session options\"]'))");
+    await checkAgentHandoff({ evaluate, until, click, fill, press });
+    app.exit(0);
+  } catch (error) { console.error(error); console.error(await evaluate("JSON.stringify({keys:window.keyTrace,active:document.activeElement?.tagName})")); app.exit(1); }
+});

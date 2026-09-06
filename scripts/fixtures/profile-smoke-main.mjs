@@ -1,0 +1,116 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { app, BrowserWindow, ipcMain, clipboard } from "electron";
+const scratch = process.env.HEY_AGENT_PROFILE_SMOKE_ROOT;
+if (!scratch?.includes("/hey-profile-smoke-")) throw new Error("Disposable test roots required.");
+const root = fileURLToPath(new URL("../../", import.meta.url));
+app.getAppPath = () => root;
+app.on("browser-window-created", (_event, window) => { window.show = () => {}; });
+const handlers = new Map();
+const register = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, fn) => { handlers.set(channel, fn); register(channel, fn); };
+const until = async (test) => {
+  for (let attempt = 0; attempt < 160; attempt++) { try { if (await test()) return; } catch {} await new Promise((resolve) => setTimeout(resolve, 30)); }
+  throw new Error("Smoke condition did not become true.");
+};
+await import(new URL("../../out/main/index.js", import.meta.url));
+// Do not await app.whenReady at module top level: Electron needs ESM evaluation to finish.
+app.whenReady().then(async () => {
+  try {
+    await until(() => BrowserWindow.getAllWindows().length > 0);
+    const window = BrowserWindow.getAllWindows()[0];
+    const evaluate = (code) => window.webContents.executeJavaScript(code);
+    const event = () => ({ sender: window.webContents, senderFrame: window.webContents.mainFrame });
+    await until(() => evaluate("Boolean(window.heyAgent?.profiles)"));
+    const initial = await evaluate("window.heyAgent.profiles.current");
+    assert.equal(initial.accounts.length, 2); assert.equal(initial.active, undefined);
+    const switchTo = async (key) => {
+      await evaluate(`void window.heyAgent.profiles.switchAccount(${JSON.stringify(key)})`);
+      await until(() => evaluate(`window.heyAgent?.profiles.current.active?.key === ${JSON.stringify(key)}`));
+      await until(() => evaluate("window.heyAgent.agent.getWorkspace().then(w => !['starting','running'].includes(w.activeSession.status))"));
+    };
+    const [first, second] = initial.accounts;
+    await switchTo(first.key);
+    // Prove the shipped file:// renderer can load Pierre's lazy comparison chunks.
+    // Only generation is stubbed; main/preload and the production UI stay real.
+    const writingHandler = handlers.get("writing:generate");
+    ipcMain.removeHandler("writing:generate");
+    register("writing:generate", async (_event, _token, request) => ({ id: request.id, text: "Reviewed production draft." }));
+    await until(() => evaluate("Boolean(document.querySelector('[data-tooltip=\"Compose a message\"]'))"));
+    await evaluate("document.querySelector('[data-tooltip=\"Compose a message\"]').click()");
+    await until(() => evaluate("Boolean(document.querySelector('[placeholder=\"Write your message…\"]'))"));
+    await evaluate(`(() => { const node=document.querySelector('[placeholder="Write your message…"]'); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(node,'Original production draft.'); node.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+    await evaluate("document.querySelector('.composer-writing-trigger').click()");
+    await until(() => evaluate("Boolean(document.querySelector('.composer-writing-quick button'))"));
+    await evaluate("document.querySelector('.composer-writing-quick button').click()");
+    await until(() => evaluate("Boolean(document.querySelector('dialog[open] diffs-container')?.shadowRoot?.querySelector('[data-line]'))"));
+    assert.equal(await evaluate("document.querySelector('[placeholder=\"Write your message…\"]').value"), "Original production draft.");
+    await evaluate("document.querySelector('dialog[open] .primary-button').click()");
+    await until(() => evaluate("!document.querySelector('dialog[open]')"));
+    assert.equal(await evaluate("document.querySelector('[placeholder=\"Write your message…\"]').value"), "Reviewed production draft.");
+    await evaluate("document.querySelector('[aria-label=\"Close composer\"]').click()");
+    ipcMain.removeHandler("writing:generate"); register("writing:generate", writingHandler);
+    console.log("PASS: production file:// draft review loads Pierre, preserves original until explicit apply, and updates the composer through the real preload boundary with synthetic generation.");
+    const firstToken = await evaluate("window.heyAgent.profiles.current.token");
+    await evaluate("window.heyAgent.settings.update({interfaceFont:'system-mono'})");
+    await evaluate("window.heyAgent.settings.get().then(s => window.heyAgent.settings.update({helpers:{...s.helpers, enabled:[...s.helpers.enabled,'custom-smoke'],custom:[{id:'custom-smoke',title:'My Helper',instructions:'Summarize the requested context.',context:'any',modelProfile:'general'}]}}))");
+    const workspace = await evaluate("window.heyAgent.agent.newSession({name:'Personal notes',helperId:'custom-smoke'})");
+    await until(() => evaluate("window.heyAgent.agent.getWorkspace().then(w => w.activeSession.status === 'ready')"));
+    await evaluate(`window.heyAgent.agent.send(${JSON.stringify(workspace.activeTabId)}, 'Synthetic test')`);
+    await assert.rejects(() => handlers.get("profiles:switch")(event(), firstToken, second.key), /Finish or stop/);
+    await evaluate(`window.heyAgent.agent.abort(${JSON.stringify(workspace.activeTabId)})`);
+    await until(() => evaluate("window.heyAgent.agent.getWorkspace().then(w => w.activeSession.status === 'ready')"));
+    const handoff = await evaluate(`window.heyAgent.agent.prepareHandoff(${JSON.stringify(workspace.activeTabId)})`);
+    assert.ok(handoff.prompt.includes("ID 101"));
+    assert.ok(handoff.targets.some(target => target.id === "codex"));
+    let copied;
+    const originalClipboard = clipboard.writeText;
+    clipboard.writeText = text => { copied = text; };
+    const handoffRequest = { id: handoff.id, prompt: "Reviewed synthetic handoff only.", target: "codex" };
+    try { await evaluate(`window.heyAgent.agent.copyHandoff(${JSON.stringify(handoffRequest)})`); }
+    finally { clipboard.writeText = originalClipboard; }
+    assert.equal(copied, handoffRequest.prompt);
+    await evaluate(`window.heyAgent.agent.launchHandoff(${JSON.stringify(handoffRequest)})`);
+    await until(async () => (await readFile(join(scratch, "handoff-launches.jsonl"), "utf8")).trim());
+    const handoffLaunches = (await readFile(join(scratch, "handoff-launches.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    assert.equal(handoffLaunches.length, 1);
+    assert.equal(handoffLaunches[0].account, "101");
+    assert.equal(handoffLaunches[0].bridge, undefined);
+    assert.ok(handoffLaunches[0].cwd.endsWith(first.key));
+    assert.ok(handoffLaunches[0].args[0].startsWith("--dir="));
+    assert.equal(await readFile(join(handoffLaunches[0].cwd, "handoffs", handoff.id, "prompt.md"), "utf8"), handoffRequest.prompt);
+    await assert.rejects(() => evaluate(`window.heyAgent.agent.launchHandoff(${JSON.stringify(handoffRequest)})`), /already opened/);
+    const oldRead = handlers.get("mail:search")(event(), firstToken, { query: "slow" }).then(() => "leaked", (error) => error.message);
+    await switchTo(second.key);
+    await assert.rejects(() => handlers.get("agent:handoff-copy")(event(), firstToken, handoffRequest), /expired/);
+    await assert.rejects(() => evaluate(`window.heyAgent.agent.launchHandoff(${JSON.stringify(handoffRequest)})`), /expired/);
+    console.log("PASS: production handoff IPC prepares profile-scoped context, copies exact edits into a clipboard spy, launches one fake terminal with a private prompt file and scoped environment, and rejects old-profile handoffs. No external agent or live clipboard used.");
+    assert.match(await oldRead, /expired/);
+    await assert.rejects(() => handlers.get("mail:send")(event(), firstToken, {}), /expired/);
+    assert.equal((await evaluate("window.heyAgent.settings.get()")).interfaceFont, "system-mono");
+    assert.equal((await evaluate("window.heyAgent.settings.get()")).helpers.custom[0].id, "custom-smoke");
+    assert.equal((await evaluate("window.heyAgent.agent.listChats()")).some((chat) => chat.id === workspace.activeTabId), false);
+    const mail = await evaluate("window.heyAgent.mail.listMailbox('imbox')");
+    assert.equal(mail.postings[0].subject, "Mail for 202");
+    await assert.rejects(() => evaluate("window.heyAgent.mail.readThread('103')"), /not been verified/);
+    const secondToken = await evaluate("window.heyAgent.profiles.current.token");
+    const send = handlers.get("mail:send")(event(), secondToken, { mode: "compose", to: "synthetic@example.com", subject: "Fixture", body: "No live mail", attachments: [] });
+    await assert.rejects(() => handlers.get("profiles:switch")(event(), secondToken, first.key), /pending changes/);
+    await send;
+    await assert.rejects(() => evaluate("window.heyAgent.mail.send({mode:'compose',to:'synthetic@example.com',subject:'Uncertain',body:'No live mail',attachments:[]})"), /transport interruption/);
+    await assert.rejects(() => handlers.get("profiles:switch")(event(), secondToken, first.key), /change needs checking/);
+    await evaluate("window.heyAgent.profiles.acknowledgeWrites()");
+    await switchTo(first.key);
+    assert.equal((await evaluate("window.heyAgent.agent.listChats()")).some((chat) => chat.id === workspace.activeTabId), true);
+    const calls = (await readFile(join(scratch, "hey-calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    for (const args of calls.filter((args) => !["auth", "account", "--version"].includes(args[0]))) assert.ok(args[0] === "--account" && ["101", "202"].includes(args[1]), JSON.stringify(args));
+    assert.equal(calls.some((args) => args.includes("use")), false);
+    const piCalls = (await readFile(join(scratch, "pi-calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    assert.ok(piCalls.some((call) => call.account === "101" && call.cwd.endsWith(first.key)));
+    assert.ok(piCalls.some((call) => call.account === "202" && call.cwd.endsWith(second.key)));
+    console.log("PASS: real Electron IPC, account discovery, profile switch/reload, expired reads/writes, scoped HEY/Pi processes, mail ID rejection, active Helper and pending send guards, interrupted-write acknowledgment, separate chat histories, shared settings and custom Helpers.");
+    app.quit();
+  } catch (error) { console.error(error); app.exit(1); }
+});

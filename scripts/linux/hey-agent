@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# HEY_AGENT_DESKTOP_LAUNCHER
+set -euo pipefail
+data_root="${XDG_DATA_HOME:-$HOME/.local/share}"
+state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
+[[ "$data_root" = /* ]] || data_root="$HOME/.local/share"
+[[ "$state_root" = /* ]] || state_root="$HOME/.local/state"
+app_path="$data_root/hey-agent-desktop/HEY-Agent.AppImage"
+if [[ ! -x "$app_path" ]]; then
+  printf 'HEY Agent is not installed at %s\n' "$app_path" >&2
+  exit 1
+fi
+umask 077
+log_dir="$state_root/hey-agent-app/logs"
+mkdir -p "$log_dir"
+export PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}:$HOME/.local/bin:$HOME/.local/share/mise/shims:$HOME/.cargo/bin"
+cd "$HOME"
+# This installer already owns desktop integration; do not offer a second copy.
+export APPIMAGELAUNCHER_DISABLE=1
+exec "$app_path" "$@" >> "$log_dir/desktop.log" 2>&1

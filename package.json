@@ -1,0 +1,111 @@
+{
+  "name": "hey-agent-app",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "description": "A native Omarchy desktop client for HEY and the user's Pi agent.",
+  "author": "Rick Blalock",
+  "desktopName": "dev.heyagent.desktop",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "postinstall": "install-electron",
+    "build": "npm run typecheck && electron-vite build",
+    "package:linux": "node scripts/package-linux.mjs",
+    "release": "node scripts/release.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "@pierre/diffs": "1.4.1",
+    "cheerio": "^1.2.0",
+    "lucide": "1.35.0",
+    "lucide-react": "1.35.0",
+    "morphicons": "1.7.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "sanitize-html": "^2.17.7",
+    "uisfx": "^0.4.0"
+  },
+  "devDependencies": {
+    "@swc/core": "1.16.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.4.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@types/sanitize-html": "^2.16.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
+  },
+  "build": {
+    "appId": "dev.heyagent.desktop",
+    "productName": "HEY Agent",
+    "executableName": "hey-agent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "extraResources": [
+      {
+        "from": "release/THIRD_PARTY_LICENSES.txt",
+        "to": "THIRD_PARTY_LICENSES.txt"
+      },
+      {
+        "from": "resources/hey-write-receipts.mjs",
+        "to": "hey-write-receipts.mjs"
+      },
+      {
+        "from": "resources/hey-account-scope.mjs",
+        "to": "hey-account-scope.mjs"
+      },
+      {
+        "from": "resources/hey-agent-pi-extension.mjs",
+        "to": "hey-agent-pi-extension.mjs"
+      },
+      {
+        "from": "resources/helpers",
+        "to": "helpers"
+      },
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "release/build-info.json",
+        "to": "build-info.json"
+      }
+    ],
+    "linux": {
+      "category": "Office",
+      "icon": "resources/icon.png",
+      "syncDesktopName": true,
+      "artifactName": "HEY-Agent-${version}-${arch}.AppImage",
+      "target": [
+        "AppImage"
+      ]
+    }
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true,
+    "@swc/core@1.16.1": true,
+    "electron-winstaller": false
+  }
+}
