@@ -1,6 +1,6 @@
 # Public release readiness
 
-Status: preparation in progress. Do not change repository visibility or publish a release merely because these files exist. The maintainer chose MIT, source-build support, signed downloadable releases, and a separately verified updater later.
+Status: [v0.1.1](https://github.com/rblalock/hey-mail-client/releases/tag/v0.1.1) published as a signed, immutable prerelease on 2026-09-06. The repository remains private. Laptop installation and the public-source checks below remain open. Do not change visibility merely because a release exists.
 
 ## Required before making the repository public
 
@@ -11,7 +11,7 @@ Status: preparation in progress. Do not change repository visibility or publish 
 - [ ] Verify GitHub branches/tags/PR refs, release assets, issues, attachments, and other repository surfaces before visibility changes. Replacing main does not guarantee GitHub immediately erases cached/dangling commits. If old commits must be unrecoverable, use a new public repository and keep this one private, or follow GitHub's removal process.
 - [ ] Confirm the icon/name's third-party brand considerations; an MIT code license does not confer trademark rights. See icon provenance and third-party notices.
 - [ ] Resolve the missing upstream license text for `launder@1.7.1` (declares MIT; current npm package and upstream package directory omit a license file). The generated notice preserves available metadata and flags this gap.
-- [ ] Enable and verify a private vulnerability-reporting route before inviting reports.
+- [ ] Enable and verify a private vulnerability-reporting route before inviting reports. GitHub's private vulnerability reporting applies to public repositories; enable it under Settings → Advanced Security when this repository becomes public.
 
 ## Audit evidence (2026-09-05)
 
@@ -34,8 +34,10 @@ Status: preparation in progress. Do not change repository visibility or publish 
 - [x] Enroll the real encrypted signing key in the maintainer's personal 1Password and match its public key to `resources/release.pub`. See [setup](release-signing.md).
 - [x] Real signing check passed on 2026-09-06: retrieved the encrypted attachment, signed a harmless test message with the maintainer entering the password locally, verified the signature, rejected an altered message, and removed the temporary key.
 - [x] Include the verified public key in the fresh root commit. No private key, password, or actual vault reference belongs in the repository.
-- [ ] Complete the first signed GitHub publication/download and install on the second Omarchy machine. The local signing check does not prove upload or cross-machine behavior.
-- [ ] Enable GitHub immutable releases and verify the setting. Current script preservation rules alone are not server-side immutability.
+- [x] Publish and download the first signed release. On 2026-09-06, all seven v0.1.1 assets were downloaded from GitHub into a fresh directory. The trusted public key verified the signature; the manifest verified all five payload hashes, sizes, product, architecture, and source revision `ea36a622903a2b8ac013749ed1429df30f991086`.
+- [ ] Install the downloaded v0.1.1 bundle on the second Omarchy machine. Check startup, HEY/Pi discovery, typing, and preservation of existing settings/chats. Publication and download verification do not prove cross-machine behavior.
+- [x] Enable GitHub immutable releases and verify the setting. Both the repository setting and published v0.1.1 report immutability enabled (2026-09-06).
+- [x] Disable GitHub Actions at repository level and verify `enabled: false` (2026-09-06). Builds and signing remain local.
 - [x] Fresh source export with a separate Git root, `npm ci`, typecheck, and AppImage/installer packaging passed on x86-64 Omarchy without signing configuration. Do not claim reproducible or broadly portable Linux binaries without further work.
 - [x] Full local test run passed: 72 files / 417 tests, including the opt-in real Minisign integration test. Ordinary runs skip that one test unless `HEY_AGENT_TEST_MINISIGN` points to a trusted executable.
 
