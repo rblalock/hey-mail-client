@@ -25,7 +25,7 @@ Build on the same CPU architecture as the destination machine. Output includes `
 
 ## Install or update
 
-For an official release, download the installer bundle, matching `.sha256`, `release-manifest.json`, and `release-manifest.json.minisig` from [GitHub Releases](https://github.com/rblalock/hey-mail-client/releases). Follow [signature verification](release-signing.md#download-verification) using Minisign and the already trusted public key, and compare the bundle's hash to the authenticated manifest **before extracting or executing it**. A checksum downloaded alongside an unsigned file does not authenticate its publisher. Until the first signed release is published, only the source-build path is available.
+For an official release, download the installer bundle, matching `.sha256`, `release-manifest.json`, and `release-manifest.json.minisig` from [GitHub Releases](https://github.com/rblalock/hey-mail-client/releases). Follow [signature verification](release-signing.md#download-verification) using Minisign and the already trusted public key, and compare the bundle's hash to the authenticated manifest **before extracting or executing it**. A checksum alone does not authenticate its publisher.
 
 For your own local source build, use the bundle and checksum produced by your build machine; signing is not required. Do not confuse GitHub's automatic source-code archive with an installer bundle. On the destination machine, use a fresh folder, replacing `VERSION` below with the release number:
 
@@ -38,7 +38,7 @@ sha256sum -c SHA256SUMS
 bash install.sh ./HEY-Agent-VERSION-x86_64.AppImage
 ```
 
-Because the repository is private and 0.x releases are marked prerelease, command-line downloads use authenticated `gh`, not a public “latest” URL:
+For command-line downloads, choose an exact tag rather than a “latest” URL that may skip prereleases. GitHub CLI needs authentication while the repository is private:
 
 ```sh
 gh release download vVERSION --repo rblalock/hey-mail-client \
@@ -46,16 +46,10 @@ gh release download vVERSION --repo rblalock/hey-mail-client \
   --pattern 'release-manifest.json*'
 ```
 
-For your own source builds, you can copy the loose AppImage and accompanying `install.sh`, `uninstall.sh`, `hey-agent`, and `icon.png` together from `release/`. For the initial local 0.1.0 build:
+For your own source builds, you can copy the loose AppImage and accompanying `install.sh`, `uninstall.sh`, `hey-agent`, and `icon.png` together from `release/`. From the build checkout, replace `VERSION` with the version in `package.json`:
 
 ```sh
-bash install.sh ./HEY-Agent-0.1.0-x86_64.AppImage
-```
-
-From the build checkout, use:
-
-```sh
-bash release/install.sh release/HEY-Agent-0.1.0-x86_64.AppImage
+bash release/install.sh release/HEY-Agent-VERSION-x86_64.AppImage
 ```
 
 No sudo is needed. Open **HEY Agent** from the desktop application launcher or run `~/.local/bin/hey-agent`. It has a separate launcher from HEY's web app and TUI. Close and reopen it after installing an update. The same installer replaces the installed binary; settings and conversations are preserved. Opening the launcher again focuses the existing window.
@@ -74,7 +68,7 @@ The install uses the XDG directories when configured; otherwise:
 - Working files: `~/.local/share/hey-agent-app/workspace/`
 - Launcher log: `~/.local/state/hey-agent-app/logs/desktop.log`
 
-The existing development settings and sessions use these same paths, so this machine retains them, including personal Helpers and their preferences. Pi owns its transcripts and model authentication; HEY owns its login and synced mail/Calendar data. App settings, authored Helpers, and Pi transcripts do not automatically sync between computers.
+Development and installed builds share these paths. Chat indexes and workspaces are separated under `profiles/<key>` for linked accounts; Settings and Helper definitions remain shared. Pi owns its transcripts and model authentication; HEY owns its login and synced mail/Calendar data. Local app settings, Helpers, and Pi transcripts do not automatically sync between computers.
 
 The app discovers executables from the graphical PATH and standard user-local/mise locations. For a custom installation, launch with `HEY_AGENT_PI_PATH=/absolute/path/to/pi` or `HEY_AGENT_HEY_PATH=/absolute/path/to/hey`; make sure `hey` is also on Pi's PATH so its tool can execute it. If Pi was installed through npm, its `node` must be visible from the graphical session too.
 

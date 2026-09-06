@@ -1,10 +1,10 @@
 # Continue in another agent
 
-Status: implemented and verified with local fixtures, 2026-09-05. This is a user-reviewed, one-way transfer from an existing HEY Agent chat into another agent. Pi remains the app's runtime. There is no results import, automatic sync, or new integration runtime.
+A user-reviewed, one-way transfer from an existing HEY Agent chat into another agent. Pi remains the app's runtime. There is no results import, automatic sync, or new integration runtime.
 
 ## Using the handoff
 
-1. Restart the updated installed app and open a chat in HEY Agent. Attach any mail, Calendar object, file reference, or selected text you want represented before opening the handoff. Let an active run finish or stop it first; a pending agent request also blocks handoff.
+1. Open a chat in HEY Agent. Attach any mail, Calendar object, file reference, or selected text you want represented before opening the handoff. Let an active run finish or stop it first; a pending agent request also blocks handoff.
 2. Open the chat's **Session options** (`…`) and choose **Continue in another agent…**.
 3. Confirm the chat title and mail account. Review the **Handoff prompt**, edit the next task, and remove anything you do not want to share.
 4. Leave **Copy for any agent** selected and choose **Copy prompt** to paste into any local or web agent. Alternatively, select a detected local agent and choose **Open [agent name]**. Copy remains available with a local destination selected.
@@ -38,7 +38,7 @@ The implementation uses the app's existing surface, field, ink, border, accent, 
 
 ## Verification
 
-The implementation pass passed 402 unit tests, including bounded prompt construction, account-scoped references, malformed payload rejection, exact edited-text copy/file read-back, private permissions, stale/expired/foreign previews, launch failure cleanup, and duplicate launch prevention. Synthetic keyboard checks covered the dialog. Production-build account-profile checks exercised the real preload/IPC boundary with a fake terminal and clipboard spy, including account isolation and preserved source session identity.
+Tests cover bounded prompt construction, account-scoped references, malformed payload rejection, exact edited-text copy/file read-back, private permissions, stale/expired/foreign previews, launch failure cleanup, and duplicate launch prevention. Synthetic keyboard checks covered the dialog. Production-build account-profile checks exercised the real preload/IPC boundary with a fake terminal and clipboard spy, including account isolation and preserved source session identity.
 
 Reproduce the local checks after building:
 

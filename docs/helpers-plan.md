@@ -1,6 +1,6 @@
-# Daily Brief, Calendar Triage, and personal Helpers
+# Helpers
 
-Status: implemented for local testing, 2026-09-04. Extends the existing Pi Helpers; does not add an agent runtime, background worker, intent router, or deterministic triage engine. See [how to test](#how-to-test) and the evidence boundaries below.
+Six built-in Helpers use the installed Pi runtime: Meeting Prep, Follow-up Finder, Thread Recap, Reply Coach, Daily Brief, and Calendar Triage. Personal Helpers add user-authored instructions. All launch explicitly; none run in the background.
 
 ## Experience and scope
 
@@ -42,19 +42,11 @@ Job: identify genuine scheduling problems in the selected day/week, explain thei
 - Persist authoring locally, independently of Pi's global settings. Saving is not running. Resetting interface settings must not erase authored Helpers. Invalid input fails visibly without discarding the editor text; duplicate names are rejected without overwriting another Helper.
 - Main process validates IDs, text lengths, context/model enums, unique names, and limits. New-session requests send an ID, not arbitrary skill paths or injected overrides.
 - Capture name and instruction text when a session starts. Edits, disabling, or deleting the definition affect future launches only; existing sessions resume the captured version. Deleting a Helper does not delete its chats or Pi transcript.
-- Add the two new built-ins once without re-enabling previously disabled Helpers. Preserve existing four Helpers and their behavior.
-
-## Verification and handoff
-
-- Unit coverage: catalog migration, enabled state, custom validation/CRUD persistence, reset preservation, context eligibility, date/day/week/year boundaries, session instruction snapshots, deleted-definition resumption, and packaged skill parity.
-- Prompt fixtures: empty/partial sources; DST/overnight/recurring events; back-to-back and true collisions; all-day/tentative/mirrored events; stale mail; injected instructions in source material; native links; bounded research; explicit follow-up mutations only.
-- Browser proof at desktop and compact widths: discovery, launch context, authoring validation/save/cancel/delete, disabled state, focus and Escape, transcript identity, and no overflow. Use synthetic data for mutation paths.
-- Run tests, typecheck, build, and local packaging. Report precisely which behaviors were exercised with fixtures versus live Pi/HEY; do not send, edit, or delete real user mail/events as a test.
-- Hand off exact user test steps. Update the product and AI plans after verification, not before.
+- Catalog migrations add new built-ins once without re-enabling Helpers the user disabled.
 
 ## Still deferred
 
-Write Like Me, Workflow Organizer/native Workflows, background runs/auto-drafts, third-party skill import, and cross-machine Helper sync. One-way external agent handoffs were implemented separately on 2026-09-05; see [scope and testing](./agent-handoff.md). Custom adapters and remote/URL integrations remain future work; results import and synchronization are outside that approved scope. No release or push is implied by this feature request.
+Write Like Me, Workflow Organizer, background runs, imports, sharing/version history, and cross-machine sync remain on the roadmap. One-way [external agent handoffs](https://github.com/rblalock/hey-mail-client/blob/main/docs/agent-handoff.md) are implemented; results import and synchronization are not promised.
 
 ## How to test
 
@@ -90,36 +82,12 @@ This is ordinary agent-led Calendar follow-through, not new Calendar permissions
 
 Instructions are saved locally and sent to the chosen model when run. This is a focused way to use your normal Pi setup—not a sandbox, arbitrary skill installer, or new grant of permission.
 
-## Verification evidence
+## Verification
 
-- **Automated:** 54 test files / 286 tests, TypeScript, and production build. New coverage includes versioned migration, CRUD validation and disk round-trips, reset preservation, context bounds, time zones/DST/year boundaries, captured instructions, deleted-definition resumption, model forwarding, and bundled skill parity. Both new skill manifests pass the skill validator.
-- **Browser preview, synthetic data:** desktop 1440×900 and compact 900×700; Calendar menu, `Ctrl+K`, day/week navigation and captured range, mail eligibility, authoring validation/save/duplicate/discard/delete, and keyboard focus recovery. Compact Settings dismisses the floating chat overlay before authoring. These are UI fixtures, not HEY API proof.
-- **Native Electron, isolated settings:** real preload/IPC, six built-ins, validation failures without data loss, reset preservation, instruction snapshots after edits/deletion and cold reopening, and rejection of future launches for a deleted definition. The packaged renderer's `Ctrl+K` path successfully creates an Any-context Helper with no attachments. HEY/Pi executables are deliberately replaced with a failing stub for these checks; the subsequent provider error is expected. This does not exercise live Calendar mutations or claim provider readiness.
-- **Local Linux package:** x86-64 AppImage and installer bundle, all six skill resources, installer checksums, and isolated packaged startup. The bundle includes this test guide. No version bump, GitHub upload, or CI trigger.
-- **Live Pi, synthetic source text only:** evaluated stale/closed mail, a malicious newsletter instruction, real versus mirrored/tentative/adjacent Calendar events, partial source failure, and personal instructions. No tools, extensions, local context, or saved sessions were enabled. GPT-5.5 handled the final representative cases; an earlier faster-model run misclassified adjacency and over-reported nonissues. Prompts were tightened, but judgment remains model-dependent—not an exhaustive behavioral guarantee. Research Helpers use General; personal Helpers can deliberately choose Quick.
-- **Not performed:** sending mail, changing/deleting real Calendar events, credential failure injection against the user's account, public release, or cross-machine sync. Exercise approved Calendar writes deliberately during user testing, not as an automatic smoke test.
+Unit and synthetic checks cover catalog migration, CRUD validation, reset preservation, eligibility, captured dates/instructions, deleted-definition resumption, and packaged skills. Prompt fixtures include partial sources, stale mail, calendar edge cases, and prompt injection. Run `npm test` and the production build after changes.
 
-Optional prompt calibration (uses the selected provider and its normal cost):
-
-```sh
-HEY_HELPER_EVAL_MODEL=openai/gpt-5.5 node scripts/evaluate-helpers.mjs
-```
-
-The script prints model answers for review, not a claim that every judgment is machine-verified. It is intentionally separate from `npm test` and packaging.
+These checks do not establish live model quality or successful real mail/Calendar mutations. Use the read-only manual cases above, and explicitly approve any real write.
 
 ## Supporting references
 
 The tentative-calendar distinction follows [HEY's Maybe Calendar explanation](https://help.hey.com/article/841-why-do-i-have-a-maybe-calendar). Date-range handling respects [HEY's configurable week start](https://help.hey.com/article/825-change-the-start-day-for-your-week). The installed HEY CLI 1.4.0 help confirms expanded `event day`/`event week` reads; the focused skills use these instead of treating an event-series list as an expanded schedule.
-
-## UI conventions
-
-These local patterns describe the built Settings and Calendar extension. Sources: [HelperSettings.tsx](../src/renderer/src/components/HelperSettings.tsx), [HelperMenu.tsx](../src/renderer/src/components/HelperMenu.tsx), and the Helper rules in [styles.css](../src/renderer/src/styles.css).
-
-- Keep Helpers in Settings' separated name-and-purpose rows, with an enable switch at the trailing edge. Editable rows have a disclosure chevron; the row being edited uses the existing accent.
-- Open one inline editor below the list. Keep visible field labels, a resizable instruction area, and adjacent Context/Model choices. Save is the primary action; Run and Cancel are secondary, with Duplicate/Delete quieter. Run remains separate from saving.
-- Use the existing theme's surfaces, fields, borders, text, accent, and danger colors, inherited font, and body/meta type roles. Reuse `MorphingIcon` and the existing semantic interface sounds for open, close, hover, select, and deselect.
-- Show validation errors and delete/discard confirmation inside the editor, preserving entered text after failures. Confirmation focuses **Keep editing**; returning to the form focuses its first field. Use the existing danger color for destructive actions and errors.
-- Focus Name or Preferences when editing starts; duplicating focuses and selects the new name. Closing restores the initiating button, falling back to **New Helper** if it was removed. Escape dismisses confirmation first, then requests discard for unsaved work; `Ctrl/Cmd+Enter` saves when no confirmation is open.
-- Calendar exposes eligible Helpers through one toolbar disclosure. Anchor its menu to the trigger, allow long names to wrap, and bound its height with scrolling. Keep the active-calendar scope and `Ctrl+K` discovery hint beneath the actions.
-- Opening the menu focuses its first action. Up/Down, `j`/`k`, and Home/End move focus; Escape closes it and restores the trigger. Moving focus outside the menu or clicking outside dismisses it. Preserve the visible focus outline and the shared hover/focus item treatment.
-- At compact desktop widths, keep fields within the available Settings column, allow action groups to wrap, and use the surrounding Settings scroll area. Preserve the Calendar toolbar's compact disclosure and continue launched results in the existing chat surface.

@@ -10,7 +10,7 @@ The governing product expectation is:
 
 The result should feel like one product. A user should not have to learn which mail, Calendar, contact, label, Collection, or app actions happen to have bespoke AI support.
 
-The user-facing interaction and delivery requirements for contextual commands, inline composer assistance, model profiles, helpers, and Workflows live in [AI experience plan](./ai-experience-plan.md). That plan must preserve the runtime and authority boundaries in this document.
+Current interaction behavior lives in [AI surfaces](./ai-experience-plan.md); deferred work lives in the [roadmap](./plan.md). These runtime and authority boundaries apply to both.
 
 ## Non-goals
 
@@ -83,7 +83,7 @@ The agent should be able to use the supported HEY CLI across these domains:
 - unnamed Set Aside groups and their posting membership;
 - Screener reads and decisions;
 - calendars, events, attendees, reminders, recurrence, attached email, todos, habits, time tracking, and journal operations supported by the installed CLI;
-- Workflows, stages, and adding, moving, or removing their mail membership through operations supported by the installed CLI;
+- Workflows and stage membership only after the deferred native feature and its impact policy are implemented; currently blocked;
 - relevant app control such as opening an object, navigating to a surface, attaching context, and showing or hiding a rail.
 
 Application UI actions should converge on shared domain operations over time, but the agent is not restricted to only those operations already represented by a button. If the installed HEY CLI safely supports an operation, Pi may use it and the app should render the result as well as its available data permits.
@@ -188,7 +188,8 @@ Agent results should link to native application objects. Major object routes are
 - Journal day;
 - completed time track and the current timer;
 - mail bundle and Set Aside group.
-- Workflow and Workflow stage.
+
+Workflow and Workflow-stage navigation is deferred, not a shipped native route.
 
 Links use the `hey-agent:` scheme in the timeline and are handled inside the renderer. Clicking one updates the normal center surface, loads authoritative data, highlights or opens the target, and preserves the agent session. Unknown or stale objects show a useful failure instead of silently navigating elsewhere.
 
@@ -223,7 +224,7 @@ Behavioral coverage must verify:
 - the HEY skill is available and the tool invokes structured argv without a shell;
 - correct posting/topic/contact/clearance/calendar/event identifier use;
 - correct bundle posting, Set Aside group, recurring series, and occurrence identifier use;
-- correct Workflow, stage, and contained-thread identifier use;
+- correct Workflow, stage, and contained-thread identifier use when that deferred feature is implemented;
 - untrusted email content cannot authorize an action;
 - exact approval contents and no mutation before approval;
 - reversible organization, broad scope, destructive actions, drafts, sends, and invitations follow policy;
@@ -235,13 +236,3 @@ Behavioral coverage must verify:
 - representative end-to-end flows work through Pi RPC, the extension, the HEY CLI, and the visible app surface.
 
 These are black-box product evaluations, not workflow specifications. The evaluator supplies ordinary user language and synthetic HEY state, then judges observable outcomes such as correct identity, review terms, side effects, reconciliation, and recovery. It must not require one exact command sequence, one exact model response, or product code that recognizes the evaluation prompts. The maintained suite is [Agentic HEY behavioral evaluations](./agentic-hey-evaluation.md).
-
-## Delivery sequence
-
-1. Preserve the local Pi RPC architecture and load the app-owned extension explicitly.
-2. Add the generic structured `hey` argv tool, deterministic impact policy, approvals, normalized artifacts, reconciliation signals, and deep links.
-3. Prove one attached-email-to-event flow end to end.
-4. Prove Collection membership across one and many threads.
-5. Prove draft creation and reviewed delivery.
-6. Expand native artifact renderers and attachments for the remaining major objects.
-7. Expand app-control coverage only for stable native presentation contracts without restricting Pi's direct supported HEY use.

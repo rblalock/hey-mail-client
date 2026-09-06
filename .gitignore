@@ -6,6 +6,7 @@ coverage/
 .DS_Store
 .impeccable/hook.cache.json
 .impeccable/review/
+.impeccable/critique/
 .env
 .env.*
 !.env.example

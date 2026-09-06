@@ -2,9 +2,9 @@
 
 ## Overview
 
-The **Review suggestion** dialog lets someone read, compare, and edit AI wording before replacing an email body. It serves inline writing assistance and the AI rail’s **Use in reply** action. Its mode is Operate: a roomy native modal using the incumbent app theme and typography.
+The **Review suggestion** dialog lets someone read, compare, and edit AI wording before replacing an email body. It serves inline writing assistance and the AI rail’s **Use in reply** action. It uses the app's existing theme and typography.
 
-This document describes the implemented component, not a new whole-app visual identity. Source of truth: [DraftReviewDialog](../src/renderer/src/components/DraftReviewDialog.tsx), [DraftDiffPreview](../src/renderer/src/components/DraftDiffPreview.tsx), and their rules in [styles.css](../src/renderer/src/styles.css).
+Implementation: [DraftReviewDialog](../src/renderer/src/components/DraftReviewDialog.tsx), [DraftDiffPreview](../src/renderer/src/components/DraftDiffPreview.tsx), and their rules in [styles.css](../src/renderer/src/styles.css).
 
 ## Colors
 
@@ -47,7 +47,7 @@ Blank or unchanged proposals cannot be applied, and application is disabled whil
 
 ## Validation and user testing
 
-The implementation handoff reports 390 passing unit tests and a passing synthetic keyboard/review smoke check. The smoke fixture exercises comparison loading, retained edits, focus containment, Escape/discard, Ctrl+Enter application, inline Restore, stale-draft and blank-proposal guards, empty-draft defaults, and IME/repeat protection. Its preview bridge records zero mail sends. Independent review disposition: ship, with no material fixes requested.
+Unit tests and the synthetic keyboard/review smoke cover comparison loading, retained edits, focus containment, Escape/discard, Ctrl+Enter application, inline Restore, stale-draft and blank-proposal guards, empty-draft defaults, and IME/repeat protection. Its preview bridge records zero mail sends.
 
 These checks use synthetic data; real HEY writes and real model calls were not tested. No human usability session is claimed. A concise user session should ask someone to compare and revise wording, switch views, discard once, then apply once, and explain what happened to the original body and whether anything was sent. Repeat in a compact window to check comparison comprehension.
 
