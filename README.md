@@ -15,8 +15,6 @@ The tested platform is **x86-64 Omarchy** (Intel or AMD). This is an independent
 
 ## A look inside
 
-Screenshots use fictional mail, Calendar entries, and example AI responses.
-
 ### Work through mail from your keyboard
 
 Move with `J` / `K`, open with `Enter`, and select with `X` or `Shift+J` / `Shift+K`. `Ctrl+K` opens commands and Helpers. Shortcuts are customizable.
@@ -49,9 +47,167 @@ Plan events across your HEY calendars and keep tasks in Sometime This Week. Habi
 
 ### Review the wording before using it
 
-Compare your draft with the suggestion, switch to Draft to edit it, then choose **Use this draft**. Nothing is sent until you send it.
+Compare your draft with the suggestion, switch to Draft to edit it, then choose **Use this draft**.
 
 ![Draft review showing removed and added wording side by side, with Draft and Changes tabs and an explicit Use this draft button.](docs/screenshots/draft-review.png)
+
+## Keyboard shortcuts
+
+HEY-like defaults on Linux. Single-letter shortcuts work outside text fields. The current view determines what a key does; `G` then `,` means two consecutive presses.
+
+### Navigation
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+K` | Open command palette |
+| `/` | Search all email |
+| `W` or `C` | Compose a message |
+| `Ctrl+B` | Toggle navigation sidebar |
+| `1` | Imbox |
+| `2` | The Feed |
+| `3` | Paper Trail |
+| `4` | Reply Later |
+| `5` | Set Aside |
+| `6` | Bubble Up |
+| `7` | Sessions |
+| `8` | The Screener |
+| `9` | Previously Seen |
+| `0` | Calendar; return to mail when in Calendar |
+| `G` then `,` | Settings |
+
+### Mail list and conversations
+
+| Shortcut | Action |
+| --- | --- |
+| `J` or `↓` | Next conversation |
+| `K` or `↑` | Previous conversation |
+| `Enter` | Open conversation |
+| `Esc` | Close conversation or clear selection |
+| `X` | Toggle selection |
+| `Shift+J` or `Shift+↓` | Extend selection down |
+| `Shift+K` or `Shift+↑` | Extend selection up |
+| `R` | Reply |
+| `F` | Forward |
+| `E` | Mark seen |
+| `U` | Mark unseen |
+| `L` or `H` | Move to Reply Later |
+| `A` | Set Aside |
+| `Z` | Bubble up tomorrow |
+| `T` or `#` | Move to Trash |
+| `↑` / `↓` | Scroll an open conversation |
+| `Space` / `Shift+Space`, `PageDown` / `PageUp` | Page through an open conversation |
+| `Home` / `End` | Top / bottom of an open conversation |
+
+Hold navigation or selection keys to repeat.
+
+### Selected conversations
+
+| Shortcut | Action |
+| --- | --- |
+| `;` | Focus bulk actions |
+| `O` | Read Together |
+| `R` | Reply Together |
+| `B` | Add to a label |
+| `N` | Add to a Collection |
+| `I` | Move to Imbox |
+| `D` | Move to The Feed |
+| `P` | Move to Paper Trail |
+| `-` | Ignore conversations |
+| `Q` | Undo the last bulk action while its undo notice is available |
+
+### Email composer
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+K` | Open AI writing help |
+| `Ctrl+Enter` | Send message |
+| `Ctrl+S` | Save draft, where available |
+| `Ctrl+Shift+C` | Show and focus Cc |
+| `Ctrl+Shift+B` | Show and focus Bcc |
+| `Ctrl+Shift+A` | Attach files |
+| `Esc` | Close writing help or the composer |
+| `↑` / `↓` in recipients | Move through contact suggestions |
+| `Enter` / `Tab` in recipients | Accept the highlighted suggestion |
+| `Enter` with a typed address | Add the recipient |
+| `Backspace` in an empty recipient field | Remove the last recipient |
+| `Esc` in contact suggestions | Close suggestions |
+
+### AI chat and sessions
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Shift+L` | Focus AI chat composer |
+| `Ctrl+Shift+B` | Toggle AI sidebar, outside the email composer |
+| `Ctrl+Enter` | Send the AI chat message |
+| `Ctrl+T` | New session |
+| `Ctrl+W` | Close session |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session |
+| `Ctrl+1` through `Ctrl+9` | Switch to that session tab, outside text fields |
+| `←` / `→` on session tabs | Previous / next session |
+
+Run Helpers from `Ctrl+K`; open external agent handoffs from the session menu. Neither has a dedicated default shortcut.
+
+### AI writing and draft review
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Enter` in writing help | Generate a suggestion |
+| `Ctrl+Enter` in draft review | Apply the reviewed draft |
+| `Esc` in draft review | Discard the suggestion |
+| `←` / `→` on the review tabs | Switch between Draft and Changes |
+| `Home` / `End` on the review tabs | First / last tab |
+| `Esc` in an agent handoff | Close the handoff |
+
+### Calendar
+
+| Shortcut | Action |
+| --- | --- |
+| `N` | New event |
+| `T` | Today |
+| `D` | Day view |
+| `W` or `U` | Week view |
+| `Y` | Year view |
+| `H` or `←` | Previous date range |
+| `L` or `→` | Next date range |
+| `J` or `↓` | Next event |
+| `K` or `↑` | Previous event |
+| `Enter` | Open highlighted event |
+| `/` | Search Calendar |
+| `Ctrl+F` | Filter the current view |
+| `B` | Habits |
+| `G` | Journal |
+| `R` | Time |
+| `E` in event details | Edit event |
+| `Delete` or `Backspace` in event details | Review event deletion |
+| `Ctrl+Enter` in the event editor | Create, review invitations, or save changes |
+| `Esc` | Close the current editor, detail, search, or filter |
+
+### Command palette and forms
+
+| Shortcut | Action |
+| --- | --- |
+| `↓` / `↑`, `Tab` / `Shift+Tab` in the palette | Next / previous command |
+| `Home` / `End` in the palette | First / last command |
+| `PageDown` / `PageUp` in the palette | Jump eight commands |
+| `Enter` in the palette | Run the selected command |
+| `Esc` in the palette | Close commands |
+| `Enter` in mail search | Search |
+| `↓` / `↑` in Calendar search | Next / previous result |
+| `Tab` / `Shift+Tab` in forms | Next / previous control |
+
+### Interface size
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl++` or `Ctrl+=` | Zoom in |
+| `Ctrl+-` | Zoom out |
+| `Ctrl+0` | Reset zoom |
+
+### Choose your shortcuts
+
+Settings → Keyboard shortcuts offers **HEY-like**, **Superhuman**, and **Custom** profiles. Choose Custom to edit individual bindings.
+
+![Keyboard shortcut settings showing the HEY-like, Superhuman, and Custom profiles, with HEY-like selected.](docs/screenshots/keyboard-settings.png)
 
 ## Install
 
