@@ -5,7 +5,7 @@ Status: [v0.1.1](https://github.com/rblalock/hey-mail-client/releases/tag/v0.1.1
 ## Required before making the repository public
 
 - [x] Add the MIT license and npm package metadata.
-- [x] Document building without any release credentials or 1Password account.
+- [x] Document building without release credentials.
 - [x] Replace the known personal account/email examples in the current source/docs with synthetic data.
 - [x] Replace GitHub main with one reviewed fresh root commit, using a GitHub noreply author address (2026-09-06, maintainer authorized). The old-history recovery bundle stays private and outside the repository. Repository visibility is unchanged.
 - [ ] Verify GitHub branches/tags/PR refs, release assets, issues, attachments, and other repository surfaces before visibility changes. Replacing main does not guarantee GitHub immediately erases cached/dangling commits. If old commits must be unrecoverable, use a new public repository and keep this one private, or follow GitHub's removal process.
@@ -30,9 +30,9 @@ Status: [v0.1.1](https://github.com/rblalock/hey-mail-client/releases/tag/v0.1.1
 - [x] Manifest binds product, version, architecture, source commit, filenames, sizes, and hashes.
 - [x] Publication fails closed on missing/invalid signature or mismatched artifacts.
 - [x] Source builds do not require release secrets. Key retrieval happens only after build/test processes finish.
-- [x] Real Minisign 0.12 integration test passed with a disposable encrypted test key and synthetic 1Password CLI: signature verification, modified manifest/artifact rejection, wrong-passphrase rejection, and temporary-key cleanup on success/failure. No real vault was accessed.
-- [x] Enroll the real encrypted signing key in the maintainer's personal 1Password and match its public key to `resources/release.pub`. See [setup](release-signing.md).
-- [x] Real signing check passed on 2026-09-06: retrieved the encrypted attachment, signed a harmless test message with the maintainer entering the password locally, verified the signature, rejected an altered message, and removed the temporary key.
+- [x] Minisign integration tests passed with a disposable encrypted test key: signature verification, modified manifest/artifact rejection, wrong-passphrase rejection, and temporary-key cleanup on success/failure.
+- [x] Configure release signing privately and match its public key to `resources/release.pub`.
+- [x] Release signing check passed on 2026-09-06: verified a test signature, rejected an altered message, and removed the temporary key.
 - [x] Include the verified public key in the fresh root commit. No private key, password, or actual vault reference belongs in the repository.
 - [x] Publish and download the first signed release. On 2026-09-06, all seven v0.1.1 assets were downloaded from GitHub into a fresh directory. The trusted public key verified the signature; the manifest verified all five payload hashes, sizes, product, architecture, and source revision `ea36a622903a2b8ac013749ed1429df30f991086`.
 - [ ] Install the downloaded v0.1.1 bundle on the second Omarchy machine. Check startup, HEY/Pi discovery, typing, and preservation of existing settings/chats. Publication and download verification do not prove cross-machine behavior.

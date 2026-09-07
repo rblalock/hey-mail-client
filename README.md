@@ -1,4 +1,4 @@
-# HEY Agent
+<h1><img src="resources/icon.png" width="40" height="40" alt="" /> HEY Agent</h1>
 
 A keyboard-first desktop app for HEY mail and Calendar, with your Pi agent alongside your inbox.
 
@@ -13,6 +13,46 @@ Work through your inbox, plan your day, and get help with the reply you've been 
 
 The tested platform is **x86-64 Omarchy** (Intel or AMD). This is an independent project, not an official HEY, Basecamp, or Omarchy app.
 
+## A look inside
+
+Screenshots use fictional mail, Calendar entries, and example AI responses.
+
+### Work through mail from your keyboard
+
+Move with `J` / `K`, open with `Enter`, and select with `X` or `Shift+J` / `Shift+K`. `Ctrl+K` opens commands and Helpers. Shortcuts are customizable.
+
+![Inbox with Bubbled Up, New For You, and Previously Seen sections, two selected conversations, and bulk actions.](docs/screenshots/inbox.png)
+
+### Find a command without hunting through menus
+
+Press `Ctrl+K`, type what you need, and hit `Enter`. Helpers are labeled, and commands show their keyboard shortcuts.
+
+![Ctrl+K command palette showing contextual Helpers, mail commands, keyboard shortcuts, and navigation hints.](docs/screenshots/command-palette.png)
+
+### Keep AI beside the conversation
+
+Ask a Helper to recap a thread, find follow-ups, or help with a reply. Attached context and source links keep the conversation close. `Ctrl+Shift+L` focuses AI chat.
+
+![Thread Recap beside the inbox, showing decisions, commitments, open questions, and a link to the attached fictional launch conversation.](docs/screenshots/helpers.png)
+
+### Choose your Helpers—or create your own
+
+Enable the Helpers you use in Settings. Choose **New Helper** to add your own instructions.
+
+![Settings with Helpers expanded, showing six built-in Helpers, their descriptions and switches, and the New Helper button.](docs/screenshots/helper-settings.png)
+
+### See your week in one place
+
+Plan events across your HEY calendars and keep tasks in Sometime This Week. Habits, Journal, and Time are a tab away.
+
+![Calendar week with work and personal events, an all-day launch, and the Sometime This Week section.](docs/screenshots/calendar.png)
+
+### Review the wording before using it
+
+Compare your draft with the suggestion, switch to Draft to edit it, then choose **Use this draft**. Nothing is sent until you send it.
+
+![Draft review showing removed and added wording side by side, with Draft and Changes tabs and an explicit Use this draft button.](docs/screenshots/draft-review.png)
+
 ## Install
 
 ### Copy and paste for your agent
@@ -25,19 +65,15 @@ Follow README.md and docs/linux-install.md. Check my Linux architecture,
 HEY CLI, Pi, and HEY skill; help me set up anything missing. Let me handle
 logins and passwords, and ask before system changes or closing an app.
 
-Choose a compatible GitHub release and tell me its version. Follow
-docs/release-signing.md to verify the signature with a trusted public key
-and check the installer hash before extracting or running it. Stop if
-verification fails; don't bypass it with an unsigned build.
+Download a compatible AppImage from GitHub Releases, tell me its version,
+and help me add it to my application launcher.
 ```
 
 ### Download the AppImage
 
 Get the Linux x86-64 AppImage from [GitHub Releases](https://github.com/rblalock/hey-mail-client/releases). Each release includes a standalone app and an installer bundle that adds a desktop launcher.
 
-1. Download `HEY-Agent-VERSION-x86_64.AppImage`, `release-manifest.json`, and `release-manifest.json.minisig` from the same release.
-2. [Verify the signature and AppImage hash](docs/release-signing.md#download-verification) before running it. Verification uses Minisign and the trusted public key; you don't need a private signing key or 1Password.
-3. In your download directory, replace `VERSION` with the version you downloaded:
+Download `HEY-Agent-VERSION-x86_64.AppImage`. In your download directory, replace `VERSION` with the version you downloaded:
 
 ```sh
 chmod +x HEY-Agent-VERSION-x86_64.AppImage
@@ -73,7 +109,7 @@ Output goes into `release/`. The build prints the exact install command, for exa
 bash release/install.sh release/HEY-Agent-VERSION-x86_64.AppImage
 ```
 
-Replace `VERSION` with the version in `package.json`. Your own source build is unsigned and needs no Minisign, 1Password account, or publishing credentials. Nothing is uploaded by these commands.
+Replace `VERSION` with the version in `package.json`. No publishing credentials are needed, and nothing is uploaded.
 
 ## Develop locally
 
@@ -95,22 +131,6 @@ git diff --check
 ```
 
 Use `npm run test:watch` while working on tests, or `npm run build` to check the production build without packaging it.
-
-## Using and updating the app
-
-With the installer bundle, open **HEY Agent** from your application launcher or run `~/.local/bin/hey-agent`. With a standalone AppImage, run the file directly.
-
-`Ctrl+K` opens commands and Helpers. `Ctrl+Shift+L` focuses AI chat. You can change shortcuts in Settings, reached from the menu beside your profile. Check **Local services** there if HEY or Pi isn't connecting.
-
-Updates are manual: verify and install the new release, then close and reopen the app. Settings and chats stay in place. See [installation, updates, and removal](docs/linux-install.md) for the full steps.
-
-## Your data
-
-HEY CLI owns your HEY login; Pi owns model authentication and transcripts. App settings, drafts, personal Helpers, and chat metadata are stored locally and do not automatically sync between computers.
-
-AI requests send relevant context to the model provider you configure in Pi. Agents can run tools against your real account; review requests and suggested actions accordingly. A release signature verifies the publisher and files, not the safety of an agent's decisions.
-
-See [Linux installation](docs/linux-install.md#data-and-diagnostics) for data paths, logs, custom executable paths, and uninstall instructions. Uninstalling the app leaves your settings, chats, and CLI logins intact.
 
 ## Contributing and releases
 

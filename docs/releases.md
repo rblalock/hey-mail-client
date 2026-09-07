@@ -36,7 +36,7 @@ A lost network response can hide a successful push or upload. Local changes, com
 GH_REPO=rblalock/hey-mail-client RELEASE_TAG=vVERSION bash scripts/publish-release.sh
 ```
 
-Publication needs Minisign and the public key, not 1Password or the private key. It refuses mismatched builds and published-asset replacement. If a release is already published, verify it instead of treating that refusal as a reason to overwrite it.
+Publication needs Minisign and the public key, not access to the private key. It refuses mismatched builds and published-asset replacement. If a release is already published, verify it instead of treating that refusal as a reason to overwrite it.
 
 Use a new version for source fixes. Never move published tags. An older installer can be used for an explicit rollback, but data-format compatibility is not guaranteed and no AppImage backup is made automatically.
 

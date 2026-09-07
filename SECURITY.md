@@ -10,11 +10,11 @@ Describe the affected version, reproduction using synthetic data, impact, and an
 
 ## Release security
 
-- Source builds need no release secrets or 1Password integration.
+- Source builds need no release credentials.
 - Official publication requires a signed checksum manifest verified against the project's independently obtained public key.
 - Never trust a replacement public key merely because it came in the same download as an update.
 - Signing credentials are loaded only during a separate local signing step, not during dependency installation, tests, or packaging.
-- Never run unreviewed pull-request code in a terminal authorized to access personal vaults or release credentials. A dedicated item is organization, not an access-control boundary for desktop CLI authentication.
+- Never run unreviewed pull-request code in a terminal with access to release credentials.
 - No release should disable Electron's sandbox or require running the application as root.
 
 ## Runtime boundaries

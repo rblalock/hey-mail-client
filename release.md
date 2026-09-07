@@ -8,31 +8,13 @@ Build, test, and sign on a local Linux x86-64 machine. GitHub hosts source and d
 
 You can release from either an Intel/AMD laptop or desktop using the same signing key. Release from one machine at a time.
 
-- Clone the current repository and install Git, Node.js 22.12 or newer, npm, GitHub CLI, Minisign, and 1Password CLI.
+- Clone the current repository and install Git, Node.js 22.12 or newer, npm, GitHub CLI, and Minisign.
 - Authenticate Git for pushing and `gh` for creating releases. Check with `gh auth status`; do not print tokens.
-- Enable [1Password desktop integration](https://www.1password.dev/cli/app-integration) on this machine and sign in to the account holding the release item.
+- Ask the maintainer for the private signing setup for this machine. Keep key storage and access instructions outside this repository.
 - Use the existing encrypted signing key. Do not generate a new key for each computer. `resources/release.pub` must be committed and match that key.
-- Set the local reference below. HEY CLI and Pi are needed to run-test the app, not to package or sign it.
+- HEY CLI and Pi are needed to run-test the app, not to package or sign it.
 
 After a history replacement, use a fresh clone. Do not merge or push the retired history back into the repository.
-
-### The signing reference
-
-`HEY_AGENT_SIGNING_KEY_REF` tells the script where the encrypted key lives in 1Password. The script requires it; it does not search your vault, read `.env` files, or source your shell configuration.
-
-For a `release.key` file attachment, replace `YOUR_VAULT_ID` with your vault's ID:
-
-```sh
-export HEY_AGENT_SIGNING_KEY_REF='op://YOUR_VAULT_ID/HEY Agent Release Signing/release.key?attribute=content'
-```
-
-The form is `op://vault/item/file?attribute=content`. Names or IDs work; quoting preserves spaces. A concealed field instead uses `op://YOUR_VAULT_ID/HEY Agent Release Signing/private-key`. See [1Password reference syntax](https://www.1password.dev/cli/secret-reference-syntax).
-
-For Bash, put the export in your local `~/.bashrc` and open a new terminal, or run it in the current terminal for this release only. An agent launched earlier will not inherit the new variable; restart it from the configured terminal or pass the reference explicitly to its release process. Noninteractive shells may not read `.bashrc`.
-
-Keep the real reference out of the repository, including tracked dotfiles. It is an address, not a credential, but it exposes vault organization. Never export the key contents or password, and never put `op read` in `.bashrc`. The signer retrieves the key only after the build, then prompts for its password in the terminal. Don't wrap the whole release in `op run`.
-
-First-time key setup and recovery details: [release signing](docs/release-signing.md).
 
 ## Publish a version
 
@@ -48,9 +30,9 @@ npm ci
 npm run release -- patch --dry-run
 ```
 
-Dry-run checks prerequisites and remote state without changing files or reading the vault. It does not build, test, or prove the key can be unlocked.
+Dry-run checks prerequisites and remote state without changing files or retrieving the signing key. It does not build, test, or prove the key can be unlocked.
 
-When ready to publish, run this in a terminal where the maintainer can answer 1Password and Minisign prompts:
+When ready to publish, run this in a terminal where the maintainer can unlock signing:
 
 ```sh
 npm run release -- patch
@@ -108,7 +90,7 @@ This can finish a draft; it refuses to overwrite a published release. It needs M
 - “Commit and push” is not permission to publish a release. Confirm the release scope and version bump when unclear.
 - Inspect the working tree first. Preserve unrelated changes; don't reset, force-push, change visibility, or scrub history as part of a routine release.
 - Use the existing scripts. Do not invent a parallel release path or bypass signing, tests, or workflow guards.
-- Request only the configured signing item. Never list unrelated vault items, print secret values, capture the password prompt, or store credentials in logs.
+- Use only the privately configured signing source. Never browse unrelated credentials, print secret values, capture the password prompt, or store credentials in logs.
 - Let the maintainer unlock signing in an interactive terminal. If that is unavailable, stop before signing rather than automating the password.
 - Verify the remote commit/tag and downloaded release assets. Report the version, commit, release URL, checks completed, and remaining manual tests.
 - Do not install over or restart a running app without permission. Don't test by sending mail or changing real calendar data.
