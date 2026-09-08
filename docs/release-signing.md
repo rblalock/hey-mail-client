@@ -18,7 +18,7 @@ A checksum alone does not verify the publisher. A public key obtained alongside 
 
 ## Maintainers
 
-See [release.md](../release.md) for publishing and recovery. Official publication requires a valid signature; local source builds do not.
+See [release.md](https://github.com/rblalock/hey-mail-client/blob/main/release.md) for publishing and recovery. Official publication requires a valid signature; local source builds do not.
 
 Keep private keys, passwords, storage references, and access instructions out of source control. Only the public key belongs here.
 

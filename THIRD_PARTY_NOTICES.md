@@ -6,4 +6,4 @@ Packaging generates `THIRD_PARTY_LICENSES.txt` from installed production depende
 
 The application includes Instrument Sans, Lucide icons, Morphicons, and uisfx through npm dependencies. Their original notices are included in the generated file. The dependency lockfile records the versions used for a build.
 
-The application icon is an AI-generated mail/maze concept informed by the Omarchy brand mark; its provenance is documented in [icon concept](docs/design/icon-concept.md). Before public distribution, review the use of the app name and derived icon against the relevant brand terms. This project is independent and does not claim endorsement by Basecamp, HEY, or Omarchy. The MIT license does not grant trademark rights.
+The application icon is an AI-generated mail/maze design inspired by the Omarchy mark. This project is independent of Basecamp, HEY, and Omarchy. The MIT license does not grant trademark rights.

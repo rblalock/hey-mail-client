@@ -68,7 +68,7 @@ if (dryRun) {
     run("bash", ["scripts/publish-release.sh"]);
     console.log(`\n${tag} built locally and published to GitHub Releases. No GitHub Actions were used.`);
   } catch (error) {
-    if (prepared) console.error("Release preparation stopped. Local changes/commit/tag are preserved; inspect git status and remote refs before retrying. Do not bump again or force-push. See docs/releases.md.");
+    if (prepared) console.error("Release preparation stopped. Local changes/commit/tag are preserved; inspect git status and remote refs before retrying. Do not bump again or force-push. See release.md.");
     throw error;
   }
 }

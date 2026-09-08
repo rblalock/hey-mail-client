@@ -33,16 +33,13 @@ for (const file of ["install.sh", "uninstall.sh", "hey-agent"]) {
 }
 copyFileSync("resources/icon.png", "release/icon.png");
 copyFileSync("docs/linux-install.md", "release/README.md");
-copyFileSync("docs/releases.md", "release/releases.md");
 copyFileSync("docs/release-signing.md", "release/release-signing.md");
-copyFileSync("docs/public-release-readiness.md", "release/public-release-readiness.md");
-copyFileSync("docs/helpers-plan.md", "release/helpers-plan.md");
 copyFileSync("LICENSE", "release/LICENSE");
 copyFileSync("THIRD_PARTY_NOTICES.md", "release/THIRD_PARTY_NOTICES.md");
 const artifactArch = process.arch === "x64" ? "x86_64" : "arm64";
 const artifact = `HEY-Agent-${pkg.version}-${artifactArch}.AppImage`;
 const digest = (file) => createHash("sha256").update(readFileSync(resolve("release", file))).digest("hex");
-const installerFiles = [artifact, "install.sh", "uninstall.sh", "hey-agent", "icon.png", "README.md", "releases.md", "release-signing.md", "public-release-readiness.md", "helpers-plan.md", "build-info.json", "LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.txt"];
+const installerFiles = [artifact, "install.sh", "uninstall.sh", "hey-agent", "icon.png", "README.md", "release-signing.md", "build-info.json", "LICENSE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.txt"];
 writeFileSync(`release/${artifact}.sha256`, `${digest(artifact)}  ${artifact}\n`);
 writeFileSync("release/SHA256SUMS", installerFiles.map((file) => `${digest(file)}  ${file}\n`).join(""));
 const bundle = `HEY-Agent-${pkg.version}-linux-${artifactArch}.tar.gz`;

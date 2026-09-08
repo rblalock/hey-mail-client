@@ -292,7 +292,9 @@ Use `npm run test:watch` while working on tests, or `npm run build` to check the
 
 Use synthetic mail and calendar fixtures in tests. Before submitting changes, run `npm run typecheck`, `npm test`, and `git diff --check`. Don't post real mail, credentials, or unredacted logs. See [Security](SECURITY.md) for reporting concerns.
 
-Maintainers and release agents: start with [release.md](release.md). Builds, signing, and uploads run locally; no GitHub Actions or paid CI is required. [Public release readiness](docs/public-release-readiness.md) tracks the remaining distribution checks.
+Maintainers and release agents: start with [release.md](release.md). Builds, signing, and uploads run locally; no GitHub Actions or paid CI is required.
+
+See the [architecture](docs/architecture.md), [agent behavior tests](docs/evaluations.md), [Helper guide](docs/helpers.md), and [roadmap](docs/roadmap.md) for more.
 
 ## License
 

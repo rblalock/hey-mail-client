@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 import type { AgentObjectLink, ThreadEntry } from "../../../shared/contracts";
 import EmailObjectPreviewBridge from "./EmailObjectPreviewBridge";
 import SmartObjectLink from "./SmartObjectLink";
+import { matchesBindingStep } from "../../../shared/shortcut-binding";
 
 type EmailBodyProps = {
   entry: ThreadEntry;
@@ -82,7 +83,16 @@ export default function EmailBody({ entry, onReaderKeyDown, onOpenObject }: Emai
       event.preventDefault();
       reader.scrollBy({ top: event.deltaY * multiplier });
     };
-    document.onkeydown = onReaderKeyDown ?? null;
+    const forwardKeyDown = (event: KeyboardEvent) => {
+      // Frame events do not bubble into the app. Forward only plain Escape;
+      // the normal dialog/preview/reader handlers still decide what closes.
+      if (!event.defaultPrevented && matchesBindingStep(event, "escape")) {
+        const forwarded = new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true });
+        if (!frame.dispatchEvent(forwarded)) event.preventDefault();
+      }
+      if (!event.defaultPrevented) onReaderKeyDown?.(event);
+    };
+    document.addEventListener("keydown", forwardKeyDown);
     document.addEventListener("wheel", forwardWheel, { passive: false });
     document.addEventListener("load", scheduleMeasure, true);
     document.addEventListener("error", scheduleMeasure, true);
@@ -95,7 +105,7 @@ export default function EmailBody({ entry, onReaderKeyDown, onOpenObject }: Emai
     scheduleMeasure();
     return () => {
       if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
-      document.onkeydown = null;
+      document.removeEventListener("keydown", forwardKeyDown);
       document.removeEventListener("wheel", forwardWheel);
       document.removeEventListener("load", scheduleMeasure, true);
       document.removeEventListener("error", scheduleMeasure, true);

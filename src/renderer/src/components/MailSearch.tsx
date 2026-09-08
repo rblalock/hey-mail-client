@@ -116,7 +116,7 @@ export default function MailSearch({ hidden = false, onClose, onOpen }: MailSear
 
         <div className="mail-search-body">
           <div className="mail-search-results">
-            {result?.postings.map((posting) => <button type="button" key={`${posting.id}-${posting.topicId}`} onClick={() => onOpen(posting)}><strong>{posting.subject}</strong><span>{posting.sender.name}</span><p>{posting.summary}</p></button>)}
+            {result?.postings.map((posting) => <button type="button" key={`${posting.id}-${posting.topicId}`} data-posting-id={posting.id} onClick={() => onOpen(posting)}><strong>{posting.subject}</strong><span>{posting.sender.name}</span><p>{posting.summary}</p></button>)}
             {result && result.postings.length === 0 && <p className="search-empty">No messages matched this search.</p>}
             {!result && !error && <p className="search-empty">Search sender, subject, message content, mailbox, date, labels, or attachments across HEY.</p>}
             {error && <p className="composer-error">{error}</p>}

@@ -1,4 +1,4 @@
-# Agentic HEY behavioral evaluations
+# Agent behavior tests
 
 ## Purpose
 

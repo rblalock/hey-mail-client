@@ -1,6 +1,6 @@
 # HEY Agent for Linux
 
-Early testing software. The app bundles Electron, its Pi extension, and all six built-in Helpers. It runs independently of this repository or a development server. Personal Helpers are saved locally in Settings; see [Helper setup and testing](helpers-plan.md).
+Early testing software. The app bundles Electron, its Pi extension, and all six built-in Helpers. It runs independently of this repository or a development server. Personal Helpers are saved locally in Settings; see the [Helper guide](https://github.com/rblalock/hey-mail-client/blob/main/docs/helpers.md).
 
 ## Requirements on each machine
 
@@ -21,7 +21,7 @@ npm ci
 npm run package:linux
 ```
 
-Build on the same CPU architecture as the destination machine. Output includes `release/HEY-Agent-VERSION-x86_64.AppImage` (or `arm64`) and a complete `HEY-Agent-VERSION-linux-x86_64.tar.gz` installer bundle. `VERSION` comes from package.json. `release/build-info.json` records the source revision, whether it had local changes, architecture, and build time. SHA-256 files identify the downloads and all bundled installer files. This build command does not publish anything; see [releasing](releases.md) for local build-and-upload releases without GitHub Actions.
+Build on the same CPU architecture as the destination machine. Output includes `release/HEY-Agent-VERSION-x86_64.AppImage` (or `arm64`) and a complete `HEY-Agent-VERSION-linux-x86_64.tar.gz` installer bundle. `VERSION` comes from package.json. `release/build-info.json` records the source revision, whether it had local changes, architecture, and build time. SHA-256 files identify the downloads and all bundled installer files. This build command does not publish anything; see [releasing](https://github.com/rblalock/hey-mail-client/blob/main/release.md) for publishing.
 
 ## Install or update
 

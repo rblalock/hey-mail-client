@@ -18,7 +18,7 @@ After a history replacement, use a fresh clone. Do not merge or push the retired
 
 ## Publish a version
 
-Check [public release readiness](docs/public-release-readiness.md) before the first distribution. A successful signing test alone does not complete that checklist.
+Before making a private repository public, inspect its old refs and release downloads as well as current source. Rewriting main does not remove cached commits or immutable release assets. Enable private vulnerability reporting when the repository becomes public.
 
 Start on clean `main` with reviewed changes committed and pushed. Confirm local `HEAD` equals GitHub's `main`; stop and reconcile if it doesn't. Don't force-push to satisfy this requirement.
 
@@ -56,7 +56,7 @@ Each release gets these seven assets (`VERSION` is the release number):
 - `release-manifest.json`
 - `release-manifest.json.minisig`
 
-The installer bundle includes the app, launcher, icon, install/uninstall scripts, docs, and license notices. Build info records the version, commit, architecture, build time, and modified status. The signed manifest identifies and hashes the first five files. GitHub also provides automatic source archives for the tag.
+The installer bundle includes the app, launcher, icon, install/uninstall scripts, installation and signature instructions, and license notices. It does not include internal plans or maintainer checklists. Build info records the version, commit, architecture, build time, and modified status. The signed manifest identifies and hashes the first five files. GitHub also provides automatic source archives for the tag.
 
 No private key, password, vault export, HEY login, mail, app settings, or Pi transcripts belong in these uploads. A history recovery bundle must stay private and outside the repository. These rules still apply when the repo becomes public.
 
@@ -83,7 +83,11 @@ If the tag is already pushed and only publication failed, keep the original sign
 GH_REPO=rblalock/hey-mail-client RELEASE_TAG=vVERSION bash scripts/publish-release.sh
 ```
 
-This can finish a draft; it refuses to overwrite a published release. It needs Minisign and the public key, but no private key or vault access. Never move published tags or replace published binaries. Use a new version for a fix. For build, signing, or push failures, follow [detailed recovery](docs/releases.md#monitor-and-recover).
+This can finish a draft; it refuses to overwrite a published release. It needs Minisign and the public key, but no private key or vault access. Never move published tags or replace published binaries. Use a new version for a fix.
+
+- Build failure: fix the cause and rebuild the prepared version. Verify its recorded source revision before continuing.
+- Signing failure: from the same clean prepared commit, retry `bash scripts/sign-release.sh vVERSION` after fixing access.
+- Push failure: compare local and remote refs and reconcile normally. Do not force-push or bump again blindly.
 
 ## Instructions for agents
 

@@ -1,5 +1,7 @@
 import { Check, CircleAlert, ExternalLink, Inbox, Newspaper, ReceiptText, RefreshCw, ThumbsDown, ThumbsUp, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { matchesBindingStep } from "../../../shared/shortcut-binding";
+import { isEditableTarget } from "../shortcuts";
 import type { AgentObjectLink, MailThread, MailboxKey, ScreenerEntry, ScreenerResult } from "../../../shared/contracts";
 import { screenerPosting } from "../screener-posting";
 import { appSound } from "../sound";
@@ -31,6 +33,29 @@ export default function ScreenerView({ onNotice, onOpenObject }: ScreenerViewPro
     finally { setLoading(false); }
   };
   useEffect(() => { void refresh(); }, []);
+
+  const closeReader = useCallback(() => {
+    const id = selected?.id;
+    appSound.play("back", "interface");
+    threadSequence.current += 1;
+    setSelected(undefined); setThread(undefined); setThreadError(undefined);
+    requestAnimationFrame(() => {
+      if (id) document.querySelector<HTMLButtonElement>(`.screener-copy[data-screener-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+    });
+  }, [selected]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !matchesBindingStep(event, "escape") || isEditableTarget(event.target)) return;
+      if (!(event.target instanceof Element) || !event.target.closest(".thread-panel")) return;
+      if (document.querySelector('[role="dialog"], [aria-modal="true"], [role="menu"]')) return;
+      event.preventDefault();
+      closeReader();
+    };
+    window.addEventListener("keydown", keyDown);
+    return () => window.removeEventListener("keydown", keyDown);
+  }, [closeReader, selected]);
 
   const open = (entry: ScreenerEntry) => {
     appSound.play("open", "interface");
@@ -71,7 +96,7 @@ export default function ScreenerView({ onNotice, onOpenObject }: ScreenerViewPro
       onRefresh={() => void refresh()}
       onRetryThread={() => open(selected)}
       replyRequest={0}
-      onClose={() => { appSound.play("back", "interface"); threadSequence.current += 1; setSelected(undefined); setThread(undefined); setThreadError(undefined); }}
+      onClose={closeReader}
       onPrevious={() => undefined}
       onNext={() => undefined}
       hasPrevious={false}
@@ -93,7 +118,7 @@ export default function ScreenerView({ onNotice, onOpenObject }: ScreenerViewPro
             <button type="button" className="is-yes" aria-expanded={choosingId === entry.id} onClick={() => { appSound.play(choosingId === entry.id ? "collapse" : "expand", "interface"); setChoosingId((current) => current === entry.id ? undefined : entry.id); }} disabled={workingId === entry.id}><ThumbsUp size={18} /><span>Yes</span></button>
             <button type="button" className="is-no" onClick={() => void decide(entry, "deny")} disabled={workingId === entry.id}><ThumbsDown size={18} /><span>No</span></button>
           </div>
-          <button type="button" className="screener-copy" onClick={() => open(entry)}><ContactAvatar className="sender-avatar" contact={entry.sender} /><span><strong>{entry.sender.name}</strong><small>{entry.sender.email}</small><b>{entry.subject}</b><p>{entry.summary}</p></span></button>
+          <button type="button" className="screener-copy" data-screener-id={entry.id} onClick={() => open(entry)}><ContactAvatar className="sender-avatar" contact={entry.sender} /><span><strong>{entry.sender.name}</strong><small>{entry.sender.email}</small><b>{entry.subject}</b><p>{entry.summary}</p></span></button>
           {choosingId === entry.id && <div className="screener-destination-popover" role="group" aria-label={`Deliver email from ${entry.sender.name} to`}>
             <header><strong>Screen in and deliver to…</strong><button type="button" aria-label="Close destination choices" onClick={() => setChoosingId(undefined)}><X size={14} /></button></header>
             <div>{DESTINATIONS.map(({ box, label, icon: Icon }) => <button key={box} type="button" disabled={workingId === entry.id} onClick={() => void decide(entry, "approve", box)}><Icon size={18} /><span>{label}</span></button>)}</div>

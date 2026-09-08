@@ -4,6 +4,7 @@ import type { AgentObjectLink, ImboxPosting, MailContactDetail, MailLibraryItem,
 import ContactAvatar from "./ContactAvatar";
 
 type MailLibraryProps = {
+  hidden?: boolean;
   onComposeContact: (contact: MailContactDetail) => void;
   onChatContact: (contact: MailContactDetail) => void;
   onOpenPosting: (posting: ImboxPosting) => void;
@@ -29,7 +30,7 @@ function initials(item: MailLibraryItem): string {
   return item.title.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 }
 
-export default function MailLibrary({ onComposeContact, onChatContact, onOpenPosting, onNotice, target, onTargetMissing, refreshToken = 0 }: MailLibraryProps) {
+export default function MailLibrary({ hidden = false, onComposeContact, onChatContact, onOpenPosting, onNotice, target, onTargetMissing, refreshToken = 0 }: MailLibraryProps) {
   const [kind, setKind] = useState<MailLibraryKind>("contacts");
   const [result, setResult] = useState<MailLibraryResult>();
   const [query, setQuery] = useState("");
@@ -104,7 +105,7 @@ export default function MailLibrary({ onComposeContact, onChatContact, onOpenPos
   };
 
   return (
-    <section className="panel library-panel" aria-label="HEY library">
+    <section hidden={hidden} style={hidden ? { display: "none" } : undefined} className="panel library-panel" aria-label="HEY library">
       <header className="panel-header"><div className="title-cluster"><h1>Library</h1><span className="title-count">{result?.items.length ?? 0}</span></div><button type="button" className="icon-button" aria-label={`Refresh ${kind}`} data-tooltip={`Refresh ${kind}`} onClick={() => void refresh()} disabled={loading}><RefreshCw size={15} className={loading ? "is-spinning" : ""} /></button></header>
       <div className="library-tabs" role="tablist">{SECTIONS.map(({ kind: section, label, icon: Icon }) => <button key={section} type="button" role="tab" aria-selected={kind === section} onClick={() => setKind(section)}><Icon size={14} /> {label}</button>)}</div>
       <label className="library-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Filter ${kind}`} /></label>
@@ -134,7 +135,7 @@ export default function MailLibrary({ onComposeContact, onChatContact, onOpenPos
               {contact.updatedAt && <div><dt>Updated</dt><dd>{new Date(contact.updatedAt).toLocaleString()}</dd></div>}
             </dl>
             {contact.status === "approved" && contact.clearanceId && <section className="contact-routing"><h3>Future delivery</h3><p>Choose where HEY should deliver future email from this sender. The CLI cannot currently read back their active destination.</p><div><button type="button" disabled={routing} onClick={() => void routeSender("imbox")}><Inbox size={14} /> Imbox</button><button type="button" disabled={routing} onClick={() => void routeSender("feedbox")}><Newspaper size={14} /> Feed</button><button type="button" disabled={routing} onClick={() => void routeSender("trailbox")}><ReceiptText size={14} /> Paper Trail</button></div></section>}
-            <section className="contact-conversations"><h3>Conversation history</h3>{contactThreadsError ? <p>{contactThreadsError}</p> : contactThreads?.postings.length ? <div>{contactThreads.postings.map((posting) => <button type="button" key={posting.id} onClick={() => onOpenPosting(posting)}><MailOpen size={13} /><span><strong>{posting.subject}</strong><small>{posting.summary || "Open conversation"}</small></span></button>)}</div> : <p>No conversations are available for this contact.</p>}</section>
+            <section className="contact-conversations"><h3>Conversation history</h3>{contactThreadsError ? <p>{contactThreadsError}</p> : contactThreads?.postings.length ? <div>{contactThreads.postings.map((posting) => <button type="button" key={posting.id} data-posting-id={posting.id} onClick={() => onOpenPosting(posting)}><MailOpen size={13} /><span><strong>{posting.subject}</strong><small>{posting.summary || "Open conversation"}</small></span></button>)}</div> : <p>No conversations are available for this contact.</p>}</section>
             <section className="contact-note"><h3>Private note</h3><p>{contact.note || "No private note for this contact."}</p></section>
           </div>}
         </aside>}

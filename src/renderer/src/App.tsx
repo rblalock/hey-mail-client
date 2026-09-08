@@ -360,6 +360,24 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [notice]);
 
+  // Called only by explicit reader actions, never by loadThread or neighbor prefetch.
+  const markOpenedSeen = useCallback((postings: ImboxPosting[]) => {
+    const postingIds = postings.filter((posting) => !posting.seen && posting.topicId && posting.kind !== "bundle").map((posting) => posting.id);
+    if (!activeMailbox || postingIds.length === 0) return;
+    const request: MailMutationRequest = { operation: "seen", postingIds };
+    // Discard mailbox reads started before this local update.
+    requestSequence.current[activeMailbox] = (requestSequence.current[activeMailbox] ?? 0) + 1;
+    setLoadingMailboxes((current) => ({ ...current, [activeMailbox]: false }));
+    setMailboxes((current) => applyOptimisticMailMutation(current, activeMailbox, undefined, request).mailboxes);
+    void window.heyAgent.mail.mutate(request).catch((reason: unknown) => {
+      appSound.play("error", "mail");
+      setNotice({ message: reason instanceof Error ? reason.message : "HEY could not mark these conversations as read." });
+      setMailboxes((current) => applyOptimisticMailMutation(current, activeMailbox, undefined, { operation: "unseen", postingIds }).mailboxes);
+      setSelected((current) => current && postingIds.includes(current.id) ? { ...current, seen: false } : current);
+      void refresh();
+    });
+  }, [activeMailbox, refresh]);
+
   const selectPosting = useCallback((posting: ImboxPosting, audible = true) => {
     selectionRange.current = undefined;
     if (audible) appSound.play("open", "interface");
@@ -375,20 +393,10 @@ export default function App() {
       return;
     }
     setThreadListing(undefined);
-    const shouldMarkSeen = activeMailbox === "imbox" && !posting.seen;
+    const shouldMarkSeen = Boolean(activeMailbox) && !posting.seen;
     setSelected(shouldMarkSeen ? { ...posting, seen: true } : posting);
-    if (shouldMarkSeen) {
-      setMailboxes((current) => {
-        const result = current.imbox;
-        return result ? { ...current, imbox: { ...result, postings: result.postings.map((item) => item.id === posting.id ? { ...item, seen: true } : item) } } : current;
-      });
-      void window.heyAgent.mail.mutate({ operation: "seen", postingIds: [posting.id] }).catch((reason: unknown) => {
-        appSound.play("error", "mail");
-        setNotice({ message: reason instanceof Error ? reason.message : "HEY could not mark this conversation as read." });
-        void refresh();
-      });
-    }
-  }, [activeMailbox, loadThreadListing, refresh]);
+    markOpenedSeen([posting]);
+  }, [activeMailbox, loadThreadListing, markOpenedSeen]);
 
   const toggleBulkSelection = useCallback((posting: ImboxPosting) => {
     selectionRange.current = undefined;
@@ -476,19 +484,8 @@ export default function App() {
     setReadTogetherThreads(cached);
     setMailboxCursor((current) => ({ ...current, [activeMailbox]: postingIds[0]! }));
 
-    if (activeMailbox !== "imbox") return;
-    const unseenIds = postings.filter((posting) => !posting.seen).map((posting) => posting.id);
-    if (unseenIds.length === 0) return;
-    setMailboxes((current) => {
-      const result = current.imbox;
-      return result ? { ...current, imbox: { ...result, postings: result.postings.map((posting) => unseenIds.includes(posting.id) ? { ...posting, seen: true } : posting) } } : current;
-    });
-    void window.heyAgent.mail.mutate({ operation: "seen", postingIds: unseenIds }).catch((reason: unknown) => {
-      appSound.play("error", "mail");
-      setNotice({ message: reason instanceof Error ? reason.message : "HEY could not mark these conversations as read." });
-      void refresh();
-    });
-  }, [activeMailbox, bulkSelectedIds, mailbox, refresh, threadCache]);
+    markOpenedSeen(postings);
+  }, [activeMailbox, bulkSelectedIds, mailbox, markOpenedSeen, threadCache]);
 
   const moveThreadSelection = useCallback((delta: number) => {
     const postings = mailbox?.postings ?? [];
@@ -776,6 +773,25 @@ export default function App() {
       || isCustomHelperId(helper.id) && (helper.contextKinds.includes("calendar-date") && (active === "calendar" || helper.minimumContexts > 0)
         || helper.minimumContexts === 0 && helperAcceptsContextCount(helper, helperMailAttachments.length)))), [active, helpers, settings.helpers.enabled, calendarHelperEvent, mailHelpers, helperMailAttachments.length]);
 
+  const closeReader = useCallback(() => {
+    const postingId = selected?.id ?? readTogether?.postingIds[0];
+    const origin = readerOrigin;
+    appSound.play("back", "interface");
+    setSelected(undefined);
+    setReaderOrigin(undefined);
+    setReadTogether(undefined);
+    setReadTogetherThreads({});
+    // Let the source view remount and finish its own initial focus first.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (document.querySelector(".thread-panel")) return;
+      const scope = origin === "search" ? ".mail-search-results" : origin === "library" ? ".contact-conversations" : origin === "bundle" ? ".thread-listing-body" : ".imbox-panel";
+      const row = postingId ? document.querySelector<HTMLElement>(`${scope} [data-posting-id="${CSS.escape(postingId)}"]`) : null;
+      const fallback = origin === "agent" ? document.querySelector<HTMLElement>(".agent-composer textarea") : document.querySelector<HTMLElement>(`${scope} button`);
+      const target = row ?? fallback;
+      if (target?.getClientRects().length) target.focus({ preventScroll: true });
+    }));
+  }, [readTogether, readerOrigin, selected]);
+
   const runCommand = useCallback((id: ShortcutId) => {
     if (id === "commands") {
       appSound.play("open", "interface");
@@ -839,10 +855,8 @@ export default function App() {
     if (id === "bulk-collection" && bulkSelectedIds.length > 0) { openBulkOrganizer("collections"); return; }
     if (bulkSelectedIds.length > 0 && isBulkMutationCommand(id)) { void runBulkCommand(id); return; }
     if (id === "back") {
-      appSound.play("back", "interface");
       if (navigation.overlay) setCompactNavigationExpanded(false);
-      else if (readTogether) { setReadTogether(undefined); setReadTogetherThreads({}); }
-      else { setSelected(undefined); setReaderOrigin(undefined); }
+      else closeReader();
       return;
     }
     if (id === "nav-sessions") { setAgentRailOpen(true); return; }
@@ -890,7 +904,7 @@ export default function App() {
     if (id === "bubble") void mutate({ operation: "bubble", postingIds: [target.id], bubbleSchedule: "tomorrow", sourceBox: activeMailbox });
     if (id === "unread") void mutate({ operation: "unseen", postingIds: [target.id] });
     if (id === "trash") void mutate({ operation: "trash", postingIds: [target.id], sourceBox: activeMailbox });
-  }, [activeMailbox, agentRailOpen, agentWorkspace, bulkSelectedIds, highlightedId, launchHelper, mailbox, moveCursor, moveThreadSelection, mutate, navigate, navigation.overlay, openBulkOrganizer, openReadTogether, readTogether, readerOrigin, runAgentContextCommand, runBulkCommand, selectPosting, selected, toggleBulkSelection, toggleNavigation]);
+  }, [activeMailbox, agentRailOpen, agentWorkspace, bulkSelectedIds, closeReader, highlightedId, launchHelper, mailbox, moveCursor, moveThreadSelection, mutate, navigate, navigation.overlay, openBulkOrganizer, openReadTogether, readTogether, readerOrigin, runAgentContextCommand, runBulkCommand, selectPosting, selected, toggleBulkSelection, toggleNavigation]);
 
   const availableCommands = useMemo(() => {
     const applicable = shortcuts.filter((command) => command.scope === "global"
@@ -938,9 +952,7 @@ export default function App() {
       }
       if (readTogether && event.key === "Escape") {
         event.preventDefault();
-        appSound.play("back", "interface");
-        setReadTogether(undefined);
-        setReadTogetherThreads({});
+        closeReader();
         return;
       }
       if (bulkSelectedIds.length > 0 && event.key === "Escape") {
@@ -978,7 +990,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => { window.removeEventListener("keydown", onKeyDown); if (chord.current) clearTimeout(chord.current.timer); };
-  }, [availableCommands, bulkComposerOpen, bulkSelectedIds.length, composer, navigation.overlay, notice?.bulkUndoId, organizer, readTogether, runCommand, undo]);
+  }, [availableCommands, bulkComposerOpen, bulkSelectedIds.length, closeReader, composer, navigation.overlay, notice?.bulkUndoId, organizer, readTogether, runCommand, undo]);
 
   const newChat = () => {
     setAgentError(undefined); setAgentDraftSeed(undefined);
@@ -1134,18 +1146,19 @@ export default function App() {
       <div className="workspace-shell" inert={navigation.overlay || undefined}>
         <div className="workspace-row" data-agent-open={agentRailOpen}>
           <div className="primary-workspace" data-agent-open={agentRailOpen}>
+            {active === "library" && <MailLibrary hidden={Boolean(readerOrigin && selected) || Boolean(missingAgentObject)} onComposeContact={(contact) => setComposer({ mode: "compose", initialTo: contact.email })} onChatContact={chatAboutContact} onOpenPosting={(posting) => openDetachedPosting(posting, "library")} onNotice={(message) => setNotice({ message })} target={libraryAgentTarget} onTargetMissing={markAgentObjectMissing} refreshToken={agentMailRefreshToken} />}
             {missingAgentObject ? <MissingObjectView object={missingAgentObject} finding={agentWorkspace?.activeSession.status === "starting" || agentWorkspace?.activeSession.status === "running"} onFind={() => void findMissingObject()} onBack={() => setMissingAgentObject(undefined)} />
-              : readerOrigin && selected ? <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={readerOrigin === "search" ? "Search results" : readerOrigin === "agent" ? "HEY Agent result" : readerOrigin === "bundle" ? threadListing?.listing?.title ?? "Bundle" : "Contact history"} onOrganize={/^\d+$/.test(selected.id) || /^\d+$/.test(selected.topicId ?? "") ? () => setOrganizer({ postings: [selected] }) : undefined} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => undefined} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={0} onClose={() => { setSelected(undefined); setReaderOrigin(undefined); }} onPrevious={() => undefined} onNext={() => undefined} hasPrevious={false} hasNext={false} showTraversal={false} onOpenObject={(object) => void openAgentObject(object)} />
+              : readerOrigin && selected ? <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={readerOrigin === "search" ? "Search results" : readerOrigin === "agent" ? "HEY Agent result" : readerOrigin === "bundle" ? threadListing?.listing?.title ?? "Bundle" : "Contact history"} onOrganize={/^\d+$/.test(selected.id) || /^\d+$/.test(selected.topicId ?? "") ? () => setOrganizer({ postings: [selected] }) : undefined} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => undefined} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={0} onClose={closeReader} onPrevious={() => undefined} onNext={() => undefined} hasPrevious={false} hasNext={false} showTraversal={false} onOpenObject={(object) => void openAgentObject(object)} />
               : activeMailbox ? <>
               <ImboxView mailboxKey={activeMailbox} showSenderAvatars={settings.showSenderAvatars} result={mailbox} overview={activeMailbox === "imbox" ? overview : undefined} loading={loading} searchRequest={0} focusSection={imboxSection} selectedId={highlightedId} bulkSelectedIds={bulkSelectedIds} bulkBusy={bulkMutating || setAsideGroupBusy} commandPaletteOpen={commandsOpen} onSelect={selectPosting} onToggleSelection={toggleBulkSelection} onBulkAction={runCommand} helperActions={mailHelperActions} onReadTogether={openReadTogether} onReplyTogether={() => setBulkComposerOpen(true)} onOrganizeSelection={openBulkOrganizer} onClearSelection={() => setBulkSelectedIds([])} onRefresh={() => void refresh()} onNavigate={navigate} setAsideGroupTarget={setAsideGroupTarget} onSetAsideGroup={(request) => void updateSetAsideGroup(request)} hidden={Boolean(selected || readTogether || threadListing)} />
               {threadListing ? <ThreadListingView listing={threadListing.listing} loading={threadListing.loading} error={threadListing.error} onBack={() => { listingRequestSequence.current += 1; setThreadListing(undefined); }} onOpen={(posting) => openDetachedPosting(posting, "bundle")} onRetry={() => void loadThreadListing(threadListing.kind, threadListing.id, true)} onShowAll={threadListing.kind === "bundle" && threadListing.listing?.contact.id ? () => void loadThreadListing("contact", threadListing.listing!.contact.id!) : undefined} />
-                : readTogether && readTogetherItems.length > 0 ? <ReadTogetherView ref={readTogetherRef} items={readTogetherItems} sourceLabel={MAILBOX_LABELS[activeMailbox]} skippedCount={readTogether.skippedCount} onClose={() => { appSound.play("back", "interface"); setReadTogether(undefined); setReadTogetherThreads({}); }} onRetryThread={(topicId) => void loadThread(topicId, { force: true, reportError: true }).then((thread) => { if (thread) setReadTogetherThreads((current) => ({ ...current, [topicId]: thread })); })} onOpenObject={(object) => void openAgentObject(object)} />
-                : selected && <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={MAILBOX_LABELS[activeMailbox]} mailActions={{ sourceBox: activeMailbox, onMutate: (request) => void mutate(request), onForward: () => { appSound.play("forward", "interface"); setComposer({ mode: "forward", posting: selected }); }, onMailChanged: replyComplete }} onOrganize={() => setOrganizer({ postings: [selected] })} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => void refresh()} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={replyRequest} replyDraftSeed={replyDraftSeed?.postingId === selected.id ? replyDraftSeed : undefined} onContinueInAgent={(draft) => void continueReplyInAgent(selected, draft)} continueInAgentLabel={settings.helpers.enabled.includes("reply-coach") ? "Reply Coach" : "Continue in agent"} onClose={() => { appSound.play("back", "interface"); setSelected(undefined); }} onPrevious={() => moveThreadSelection(-1)} onNext={() => moveThreadSelection(1)} hasPrevious={hasPrevious} hasNext={hasNext} onOpenObject={(object) => void openAgentObject(object)} />}
+                : readTogether && readTogetherItems.length > 0 ? <ReadTogetherView ref={readTogetherRef} items={readTogetherItems} sourceLabel={MAILBOX_LABELS[activeMailbox]} skippedCount={readTogether.skippedCount} onClose={closeReader} onRetryThread={(topicId) => void loadThread(topicId, { force: true, reportError: true }).then((thread) => { if (thread) setReadTogetherThreads((current) => ({ ...current, [topicId]: thread })); })} onOpenObject={(object) => void openAgentObject(object)} />
+                : selected && <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={MAILBOX_LABELS[activeMailbox]} mailActions={{ sourceBox: activeMailbox, onMutate: (request) => void mutate(request), onForward: () => { appSound.play("forward", "interface"); setComposer({ mode: "forward", posting: selected }); }, onMailChanged: replyComplete }} onOrganize={() => setOrganizer({ postings: [selected] })} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => void refresh()} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={replyRequest} replyDraftSeed={replyDraftSeed?.postingId === selected.id ? replyDraftSeed : undefined} onContinueInAgent={(draft) => void continueReplyInAgent(selected, draft)} continueInAgentLabel={settings.helpers.enabled.includes("reply-coach") ? "Reply Coach" : "Continue in agent"} onClose={closeReader} onPrevious={() => moveThreadSelection(-1)} onNext={() => moveThreadSelection(1)} hasPrevious={hasPrevious} hasNext={hasNext} onOpenObject={(object) => void openAgentObject(object)} />}
             </>
               : active === "screener" ? <ScreenerView onNotice={(message) => setNotice({ message })} onOpenObject={(object) => void openAgentObject(object)} />
               : active === "drafts" ? <DraftsView onNotice={(message) => setNotice({ message })} target={draftAgentTarget} onTargetMissing={markAgentObjectMissing} refreshToken={agentMailRefreshToken} />
               : active === "calendar" ? <CalendarView onReturnMail={() => navigate("imbox")} onNotice={(message) => setNotice({ message })} target={calendarAgentTarget} onTargetMissing={markAgentObjectMissing} onActiveEvent={setCalendarHelperEvent} onHelperWindow={setCalendarHelperWindow} helpers={contextualHelpers.filter((helper) => helper.id !== "meeting-prep" && helper.surfaces.includes("calendar"))} onRunHelper={launchHelper} onMeetingPrep={startMeetingPrep} meetingPrepEnabled={settings.helpers.enabled.includes("meeting-prep")} meetingPrepBusy={startingHelpers.has("meeting-prep")} refreshToken={agentCalendarRefreshToken} />
-              : active === "library" ? <MailLibrary onComposeContact={(contact) => setComposer({ mode: "compose", initialTo: contact.email })} onChatContact={chatAboutContact} onOpenPosting={(posting) => openDetachedPosting(posting, "library")} onNotice={(message) => setNotice({ message })} target={libraryAgentTarget} onTargetMissing={markAgentObjectMissing} refreshToken={agentMailRefreshToken} />
+              : active === "library" ? null
               : active === "settings" ? <SettingsView settings={settings} theme={theme} onSettings={setSettings} onRunHelper={launchHelper} onEditHelper={() => { if (window.matchMedia("(max-width: 980px)").matches) setAgentRailOpen(false); }} runnableHelpers={contextualHelpers.map((helper) => helper.id)} busyHelpers={startingHelpers} />
               : active === "sessions" ? <SessionHistory workspace={agentWorkspace} onWorkspace={setAgentWorkspace} onOpen={() => { setAgentDraftSeed(undefined); setAgentRailOpen(true); setAgentFocusRequest((value) => value + 1); }} />
               : <UnsupportedView active={active} onReturn={() => setActive("imbox")} />}
