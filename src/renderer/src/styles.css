@@ -4493,9 +4493,8 @@ button.entry-disclosure:focus-visible { outline: 2px solid var(--accent); outlin
 .draft-review-comparison { padding: 20px 28px 28px; }
 .draft-review-column-labels { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding-bottom: 20px; font-size: 14px; font-weight: 600; }
 .draft-review-column-labels small { display: block; margin-top: 3px; color: var(--ink-2); font-size: 12px; font-weight: 400; }
-.draft-review-column-labels > span:first-child small::before { content: "− "; }
-.draft-review-column-labels > span:last-child small::before { content: "+ "; }
-.draft-review-diff { --diffs-font-family: var(--app-font); --diffs-font-size: 16px; --diffs-line-height: 1.75; --diffs-header-font-family: var(--app-font); --diffs-deletion-color-override: var(--red); --diffs-addition-color-override: var(--green); --diffs-gap-inline: 12px; --diffs-gap-block: 8px; }
+/* Pierre's editor measures ASCII carets in fixed-width columns. */
+.draft-review-diff { --diffs-font-family: var(--app-mono); --diffs-font-size: 16px; --diffs-line-height: 1.75; --diffs-header-font-family: var(--app-font); --diffs-deletion-color-override: var(--red); --diffs-addition-color-override: var(--green); --diffs-gap-inline: 12px; --diffs-gap-block: 8px; }
 .draft-review-message { margin: 0; padding: 28px; color: var(--ink-2); font-size: 15px; line-height: 1.6; }
 .draft-review-error { margin: 0; padding: 12px 28px; border-top: 1px solid var(--line); color: var(--ink); font-size: 14px; line-height: 1.5; }
 .draft-review-footer { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-top: 1px solid var(--line); }

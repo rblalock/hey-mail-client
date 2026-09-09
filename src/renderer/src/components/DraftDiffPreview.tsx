@@ -1,7 +1,20 @@
-import { MultiFileDiff } from "@pierre/diffs/react";
-import { useEffect, useMemo, useState } from "react";
+import { EditProvider, MultiFileDiff } from "@pierre/diffs/react";
+import { Editor, type EditorFactory, type EditorOptions } from "@pierre/diffs/edit";
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { draftTextEdit } from "../draft-edit";
 
-export default function DraftDiffPreview({ original, proposed }: { original: string; proposed: string }) {
+export type DraftDiffHandle = { undo: () => boolean; redo: () => boolean; setText: (text: string) => void };
+const createEditor: EditorFactory<undefined, undefined> = (type, options, key) => new Editor(type, options, key);
+
+export default function DraftDiffPreview({ original, proposed, onChange, ref }: { original: string; proposed: string; onChange: (text: string) => void; ref?: Ref<DraftDiffHandle> }) {
+  const editor = useRef<Editor<"file-diff"> | null>(null);
+  const latestProposed = useRef(proposed);
+  useLayoutEffect(() => { latestProposed.current = proposed; }, [proposed]);
+  useImperativeHandle(ref, () => ({
+    undo: () => { if (!editor.current) return false; editor.current.undo(); return true; },
+    redo: () => { if (!editor.current) return false; editor.current.redo(); return true; },
+    setText: (text) => { if (editor.current) editor.current.applyEdits(draftTextEdit(editor.current.getText(), text)); },
+  }), []);
   const [compact, setCompact] = useState(() => window.matchMedia("(max-width: 800px)").matches);
   const [theme, setTheme] = useState<"light" | "dark">(() => document.documentElement.dataset.theme === "light" ? "light" : "dark");
   useEffect(() => {
@@ -13,7 +26,17 @@ export default function DraftDiffPreview({ original, proposed }: { original: str
     return () => { query.removeEventListener("change", resize); observer.disconnect(); };
   }, []);
   const oldFile = useMemo(() => ({ name: "Your draft", contents: original, lang: "text" as const }), [original]);
-  const newFile = useMemo(() => ({ name: "Suggested revision", contents: proposed, lang: "text" as const }), [proposed]);
+  // Pierre owns the live new file. Never feed its change events back as props.
+  const [newFile] = useState(() => ({ name: "Suggested revision", contents: proposed, lang: "text" as const }));
+  const editorOptions = useMemo<EditorOptions<"file-diff", undefined, undefined>>(() => ({
+    matchBrackets: false,
+    onAttach: (instance) => {
+      editor.current = instance;
+      // Catch edits made in Draft while this lazy module was loading.
+      instance.applyEdits(draftTextEdit(instance.getText(), latestProposed.current));
+    },
+    onComplete: () => { editor.current = null; },
+  }), []);
   const options = useMemo(() => ({
     diffStyle: compact ? "unified" as const : "split" as const,
     themeType: theme, theme: { light: "pierre-light" as const, dark: "pierre-dark" as const },
@@ -31,8 +54,10 @@ export default function DraftDiffPreview({ original, proposed }: { original: str
   }), [compact, theme]);
   return <div className="draft-review-comparison">
     <div className="draft-review-column-labels" data-compact={compact}>
-      <span>Your draft <small>Removed wording</small></span><span>Suggested revision <small>Added wording</small></span>
+      <span>Your draft <small>Read-only original</small></span><span>Suggested revision <small>Click to edit</small></span>
     </div>
-    <MultiFileDiff className="draft-review-diff" oldFile={oldFile} newFile={newFile} options={options} />
+    <EditProvider createEditor={createEditor}>
+      <MultiFileDiff className="draft-review-diff" oldFile={oldFile} newFile={newFile} options={options} edit editorOptions={editorOptions} onEditChange={(event) => onChange(event.file.contents)} onEditComplete={() => "reject"} />
+    </EditProvider>
   </div>;
 }

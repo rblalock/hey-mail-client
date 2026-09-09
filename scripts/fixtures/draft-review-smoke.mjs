@@ -5,6 +5,16 @@ export async function checkDraftReview({ evaluate, until, click, fill, press }) 
   const review = 'dialog.draft-review-dialog[open]';
   const body = '[placeholder="Write your message…"]';
   const editor = '[aria-label="Suggested email draft"]';
+  const diffInput = `document.querySelector('${review} diffs-container')?.shadowRoot?.querySelector('[role="textbox"]')`;
+  const diffKey = async (key, flags = {}) => {
+    await evaluate(`(() => { const input=${diffInput}; input.focus(); input.dispatchEvent(new KeyboardEvent('keydown', {key:${JSON.stringify(key)},bubbles:true,composed:true,cancelable:true,...${JSON.stringify(flags)}})); })()`);
+  };
+  const replaceDiff = async (text) => {
+    await until(`Boolean(${diffInput})`);
+    await diffKey('a', {ctrlKey:true});
+    await evaluate(`(${diffInput}).dispatchEvent(new InputEvent('beforeinput', {inputType:'insertText',data:${JSON.stringify(text)},bubbles:true,composed:true,cancelable:true}))`);
+    await until(`document.querySelector('${editor}').value === ${JSON.stringify(text)}`);
+  };
   const tab = async (name) => evaluate(`[...document.querySelectorAll('${review} [role=tab]')].find(n=>n.textContent===${JSON.stringify(name)}).click()`);
   const original = "Synthetic draft only.";
   const generate = async () => {
@@ -22,6 +32,24 @@ export async function checkDraftReview({ evaluate, until, click, fill, press }) 
   await press("Tab");
   assert.equal(await evaluate(`document.activeElement===document.querySelector('${review} .draft-review-heading button')`), true);
   await until(`Boolean(document.querySelector('${review} diffs-container')?.shadowRoot?.querySelector('[data-line]'))`);
+  await until(`Boolean(${diffInput})`);
+  const initialProposal = await evaluate(`document.querySelector('${editor}').value`);
+  await replaceDiff("Directly edited suggestion.\n\n**Friday**, $5,000. 👋");
+  assert.equal(await evaluate(`document.querySelector('${body}').value`), original);
+  assert.equal(await evaluate(`document.querySelector('${review} diffs-container').shadowRoot.querySelectorAll('[role=textbox]').length`), 1, 'only the proposed side is editable');
+  await tab('Draft'); await evaluate(`document.querySelector('${editor}').focus()`); await press('z', ['control']);
+  await until(`document.querySelector('${editor}').value === ${JSON.stringify(initialProposal)}`);
+  await press('z', ['control', 'shift']);
+  await until(`document.querySelector('${editor}').value.startsWith('Directly edited')`);
+  await tab('Changes');
+  await diffKey('Tab');
+  assert.equal(await evaluate(`document.activeElement===document.querySelector('${review} .draft-review-footer .toolbar-button')`), true);
+  await diffKey('Tab', {shiftKey:true});
+  assert.equal(await evaluate(`document.activeElement.textContent`), 'Changes');
+  // Fast consecutive input must never be overwritten by stale React updates.
+  await diffKey('End', {ctrlKey:true});
+  await evaluate(`for (const text of [' See', ' you', ' soon!']) (${diffInput}).dispatchEvent(new InputEvent('beforeinput', {inputType:'insertText',data:text,bubbles:true,composed:true,cancelable:true}))`);
+  await until(`document.querySelector('${editor}').value.endsWith(' See you soon!')`);
   await tab("Draft");
   await fill(editor, "Reviewed and edited draft.");
   await tab("Changes"); await tab("Draft");
@@ -36,8 +64,8 @@ export async function checkDraftReview({ evaluate, until, click, fill, press }) 
   assert.equal(await evaluate(`document.querySelector('${body}').value`), original);
   await until(`document.activeElement===document.querySelector('${body}')`);
 
-  await generate(); await tab("Draft"); await fill(editor, "Reviewed and edited draft.");
-  await press("Enter", ["control"]);
+  await generate(); await replaceDiff("Reviewed and edited draft.");
+  await diffKey("Enter", {ctrlKey:true});
   await until(`!document.querySelector('${review}')`);
   assert.equal(await evaluate(`document.querySelector('${body}').value`), "Reviewed and edited draft.");
   assert.equal(await evaluate("window.proof.sends.length"), 0);
@@ -57,6 +85,15 @@ export async function checkDraftReview({ evaluate, until, click, fill, press }) 
   await fill(editor, "   ");
   assert.equal(await evaluate(`document.querySelector('${review} .primary-button').disabled`), true);
   await press("Escape"); await fill(body, original);
+  await generate(); await replaceDiff('');
+  assert.equal(await evaluate(`document.querySelector('${review} .primary-button').disabled`), true);
+  await replaceDiff(original);
+  assert.equal(await evaluate(`document.querySelector('${review} .primary-button').disabled`), true);
+  await replaceDiff('A fresh suggestion after deleting everything.');
+  assert.equal(await evaluate(`document.querySelector('${review} .primary-button').disabled`), false);
+  await diffKey('Escape');
+  await until(`!document.querySelector('${review}')`);
+  assert.equal(await evaluate(`document.querySelector('${body}').value`), original);
   assert.equal(await evaluate("window.proof.sends.length"), 0);
-  console.log("Draft review smoke passed: lazy Pierre comparison, editable proposal retained across tabs, discard, explicit apply, Restore, stale draft guard, blank proposal guard, new-draft default, IME/repeat protection, and zero mail sends.");
+  console.log("Draft review smoke passed: direct diff editing, read-only original, shared undo/redo across views, rapid input, Tab exit, blank/unchanged recovery, lazy loading, discard, explicit apply, Restore, stale draft guard, new-draft default, IME/repeat protection, and zero mail sends.");
 }
