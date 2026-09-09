@@ -35,6 +35,8 @@ export default function ThreadListingView({ listing, loading, error, onBack, onO
       if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
       const key = event.key.toLowerCase();
       if (event.key === "Escape") { event.preventDefault(); onBack(); return; }
+      // Native activation belongs to the focused row or header control.
+      if (key === "enter" && target?.closest("button, a[href]")) return;
       if (!["arrowdown", "arrowup", "j", "k", "enter"].includes(key)) return;
       event.preventDefault();
       if (key === "enter" && highlightedIndex >= 0) { onOpen(postings[highlightedIndex]!); return; }
@@ -60,7 +62,7 @@ export default function ThreadListingView({ listing, loading, error, onBack, onO
       {loading && !listing && <div className="thread-listing-loading"><LoaderCircle className="is-spinning" size={16} />Reading HEY conversations…</div>}
       {error && <div className="empty-state"><Inbox size={18} /><h2>These conversations could not be read</h2><p>{error}</p><button type="button" className="primary-button" onClick={onRetry}>Try again</button></div>}
       {!loading && !error && listing && postings.length === 0 && <div className="empty-state"><MailOpen size={18} /><h2>No unseen conversations</h2><p>This bundle has been read through. The contact’s complete history is still available.</p>{onShowAll && <button type="button" className="primary-button" onClick={onShowAll}>Show all conversations</button>}</div>}
-      {!error && postings.map((posting) => <button id={`thread-listing-${posting.id}`} data-posting-id={posting.id} ref={(node) => { if (node) rowRefs.current.set(posting.id, node); else rowRefs.current.delete(posting.id); }} type="button" role="option" aria-selected={highlightedId === posting.id} key={posting.id} className="thread-listing-row" onPointerEnter={() => setHighlightedId(posting.id)} onClick={() => onOpen(posting)}>
+      {!error && postings.map((posting) => <button id={`thread-listing-${posting.id}`} data-posting-id={posting.id} ref={(node) => { if (node) rowRefs.current.set(posting.id, node); else rowRefs.current.delete(posting.id); }} type="button" role="option" aria-selected={highlightedId === posting.id} key={posting.id} className="thread-listing-row" onFocus={() => setHighlightedId(posting.id)} onClick={() => onOpen(posting)}>
         <ContactAvatar contact={posting.sender} />
         <span><strong>{posting.subject}</strong><small>{posting.summary || posting.sender.name}</small></span>
         <time>{formatDate(posting.createdAt)}</time>

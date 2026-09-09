@@ -47,6 +47,21 @@ export async function checkEmailEscape({ evaluate, until, click, fill, press }) 
     await click('.email-remote-control'); await frameReady();
     await escapeFrame('a');
     await checkReturn('.mail-row', id);
+    // Escape restores native button focus. Moving the list cursor must move that
+    // focus too, or native Enter activates the old row despite the new highlight.
+    for (const key of ['j', 'k', 'ArrowDown', 'ArrowUp']) {
+      const before = await evaluate("document.querySelector('.mail-row[data-selected=true]').dataset.postingId");
+      await press(key);
+      const next = await evaluate("document.querySelector('.mail-row[data-selected=true]').dataset.postingId");
+      assert.notEqual(next, before, `List cursor should move with ${key}`);
+      assert.equal(await evaluate("document.activeElement.dataset.postingId"), next, `Native focus should follow ${key}`);
+      const subject = await evaluate("document.activeElement.querySelector('.subject-line strong').textContent");
+      // DOM-dispatched key events lack browser defaults in this hidden harness.
+      await evaluate('document.activeElement.click()');
+      await until(`document.querySelector('.thread-panel h1')?.textContent === ${JSON.stringify(subject)}`);
+      await evaluate("(() => { const panel=document.querySelector('.thread-panel'); panel.tabIndex=-1; panel.focus(); })()");
+      await press('Escape'); await checkReturn('.mail-row', next);
+    }
   }
 
   await evaluate('document.activeElement.blur()'); await press('2');

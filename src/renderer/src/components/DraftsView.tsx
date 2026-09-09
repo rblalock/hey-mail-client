@@ -13,10 +13,12 @@ export default function DraftsView({ onNotice, target, onTargetMissing, refreshT
   const hint = useShortcutHints();
   const editorRef = useRef<HTMLDivElement>(null);
   const submitting = useRef(false);
+  const openRequest = useRef(0);
   const [drafts, setDrafts] = useState<MailDraft[]>([]);
   const [selected, setSelected] = useProfileValue<MailDraft | undefined>("draft-editor", undefined);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [opening, setOpening] = useState(false);
   const [error, setError] = useState<string>();
   const bodyInput = useRef<HTMLTextAreaElement>(null);
   const writingAssistant = useRef<ComposerWritingHandle>(null);
@@ -31,15 +33,24 @@ export default function DraftsView({ onNotice, target, onTargetMissing, refreshT
     finally { setLoading(false); }
   };
   useEffect(() => { void refresh(); }, [refreshToken]);
+  useEffect(() => () => { openRequest.current += 1; }, []);
 
   const open = async (id: string, linkedObject?: AgentObjectLink) => {
-    setError(undefined);
-    try { setSelected(await window.heyAgent.mail.showDraft(id)); appSound.play("open", "interface"); }
+    if (submitting.current || saving) return;
+    const request = ++openRequest.current;
+    setError(undefined); setSelected(undefined); setOpening(true);
+    try {
+      const draft = await window.heyAgent.mail.showDraft(id);
+      if (request !== openRequest.current) return;
+      setSelected(draft); appSound.play("open", "interface");
+    }
     catch (reason) {
+      if (request !== openRequest.current) return;
       appSound.play("error", "mail");
       if (linkedObject) onTargetMissing?.(linkedObject);
       else setError(reason instanceof Error ? reason.message : "HEY could not read this draft.");
     }
+    finally { if (request === openRequest.current) setOpening(false); }
   };
   useEffect(() => { if (target) void open(target.id, target.object); }, [target?.revision]);
 
@@ -84,7 +95,7 @@ export default function DraftsView({ onNotice, target, onTargetMissing, refreshT
       <header className="panel-header"><div className="title-cluster"><h1>Drafts</h1><span className="title-count">{drafts.length}</span></div><button type="button" className="icon-button" aria-label="Refresh drafts" onClick={() => void refresh()} disabled={loading}><RefreshCw size={15} className={loading ? "is-spinning" : ""} /></button></header>
       <div className="drafts-layout">
         <div className="draft-list">
-          {drafts.map((draft) => <button key={draft.id} type="button" data-selected={selected?.id === draft.id} onClick={() => void open(draft.id)}><FileEdit size={15} /><span><strong>{draft.subject}</strong><small>{draft.to || "No recipients yet"}</small></span>{draft.updatedAt && <time>{new Date(draft.updatedAt).toLocaleDateString()}</time>}</button>)}
+          {drafts.map((draft) => <button key={draft.id} type="button" disabled={saving} data-selected={selected?.id === draft.id} onClick={() => void open(draft.id)}><FileEdit size={15} /><span><strong>{draft.subject}</strong><small>{draft.to || "No recipients yet"}</small></span>{draft.updatedAt && <time>{new Date(draft.updatedAt).toLocaleDateString()}</time>}</button>)}
           {!loading && drafts.length === 0 && <div className="empty-state"><FileEdit size={20} /><h2>No drafts</h2><p>Saved messages will appear here and in HEY.</p></div>}
         </div>
         {selected ? <div ref={editorRef} className="draft-editor" onKeyDown={handleKeys}>
@@ -96,7 +107,7 @@ export default function DraftsView({ onNotice, target, onTargetMissing, refreshT
           <textarea ref={bodyInput} value={selected.body} onChange={(event) => setSelected({ ...selected, body: event.target.value })} />
           {error && <p className="composer-error">{error}</p>}
           <footer><button type="button" className="secondary-button draft-delete" onClick={() => void remove()} disabled={saving}><Trash2 size={14} /> Delete</button><ComposerWritingAssistant disabled={saving} key={selected.id} ref={writingAssistant} value={selected.body} onChange={(body) => setSelected((current) => current ? { ...current, body } : current)} textareaRef={bodyInput} mode="compose" subject={selected.subject} recipients={[selected.to, selected.cc, selected.bcc].filter(Boolean).join(", ")} /><span /><button type="button" className="secondary-button" data-tooltip="Save draft" data-shortcut={hint("composer-save")} onClick={() => void save()} disabled={saving}><Save size={14} /> Save</button><button type="button" className="send-button" data-tooltip="Save changes and send draft" data-shortcut={hint("composer-send")} onClick={() => void send()} disabled={saving || !selected.to.trim()}><Send size={14} /> Send</button></footer>
-        </div> : <div className="draft-editor-empty"><FileEdit size={22} /><p>Select a draft to continue writing.</p>{error && <p className="composer-error">{error}</p>}</div>}
+        </div> : <div className="draft-editor-empty"><FileEdit size={22} /><p>{opening ? "Loading draft…" : "Select a draft to continue writing."}</p>{error && <p className="composer-error">{error}</p>}</div>}
       </div>
     </section>
   );

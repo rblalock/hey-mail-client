@@ -20,6 +20,7 @@ type ImboxViewProps = {
   bulkBusy: boolean;
   commandPaletteOpen: boolean;
   onSelect: (posting: ImboxPosting) => void;
+  onHighlight: (id: string) => void;
   onToggleSelection: (posting: ImboxPosting) => void;
   onBulkAction: (id: ShortcutId) => void;
   helperActions?: Array<{ id: ShortcutId; title: string }>;
@@ -50,7 +51,7 @@ export function mailboxEmptyCopy(boxName: string, imbox: boolean, filtered: bool
   return { title: `${boxName} is empty`, detail: `There are no conversations in ${boxName}.` };
 }
 
-function MailRow({ posting, selectedId, bulkSelected, imbox, showSenderAvatars, onSelect, onToggleSelection }: { posting: ImboxPosting; selectedId?: string; bulkSelected: boolean; imbox: boolean; showSenderAvatars: boolean; onSelect: (posting: ImboxPosting) => void; onToggleSelection: (posting: ImboxPosting) => void }) {
+function MailRow({ posting, selectedId, bulkSelected, imbox, showSenderAvatars, onSelect, onHighlight, onToggleSelection }: { posting: ImboxPosting; selectedId?: string; bulkSelected: boolean; imbox: boolean; showSenderAvatars: boolean; onSelect: (posting: ImboxPosting) => void; onHighlight: (id: string) => void; onToggleSelection: (posting: ImboxPosting) => void }) {
   const selectHint = useShortcutHints()("select");
   const sender = posting.sender.name;
   const selected = posting.id === selectedId;
@@ -60,7 +61,7 @@ function MailRow({ posting, selectedId, bulkSelected, imbox, showSenderAvatars, 
     else onSelect(posting);
   };
   const previewHover = () => appSound.play("hover", "interface", { cooldownMs: 70, retrigger: "restart" });
-  return <button id={`mail-row-${posting.id}`} type="button" role="option" aria-current={selected || undefined} aria-selected={bulkSelected} aria-keyshortcuts={selectHint && !selectHint.includes(" then ") ? selectHint : undefined} className="mail-row" data-posting-id={posting.id} data-selected={selected} data-bulk-selected={bulkSelected} data-unseen={!posting.seen && !bubbledUp} onPointerEnter={previewHover} onClick={clickRow}>
+  return <button id={`mail-row-${posting.id}`} type="button" role="option" aria-current={selected || undefined} aria-selected={bulkSelected} aria-keyshortcuts={selectHint && !selectHint.includes(" then ") ? selectHint : undefined} className="mail-row" data-posting-id={posting.id} data-selected={selected} data-bulk-selected={bulkSelected} data-unseen={!posting.seen && !bubbledUp} onFocus={() => onHighlight(posting.id)} onPointerEnter={previewHover} onClick={clickRow}>
     <span className="mail-state-cell" data-bulk-toggle data-tooltip={bulkSelected ? "Remove from selection" : "Select conversation"} data-shortcut-id="select">
       <span className="mail-selection-mark" data-checked={bulkSelected}>{bulkSelected && <Check size={12} />}</span>
       {!bulkSelected && (bubbledUp ? <span className="bubbled-up-mark" title="Bubbled Up"><ArrowUpCircle size={16} aria-label="Bubbled Up" /></span> : !posting.seen && <span className="unseen-dot" title="Unseen" />)}
@@ -77,7 +78,7 @@ function MailRow({ posting, selectedId, bulkSelected, imbox, showSenderAvatars, 
   </button>;
 }
 
-export default function ImboxView({ mailboxKey, result, overview, loading, searchRequest, focusSection = "new", selectedId, bulkSelectedIds, bulkBusy, commandPaletteOpen, onSelect, onToggleSelection, onBulkAction, helperActions = [], onReadTogether, onReplyTogether, onOrganizeSelection, onClearSelection, onRefresh, onNavigate, setAsideGroupTarget, onSetAsideGroup, hidden = false, showSenderAvatars = false }: ImboxViewProps) {
+export default function ImboxView({ mailboxKey, result, overview, loading, searchRequest, focusSection = "new", selectedId, bulkSelectedIds, bulkBusy, commandPaletteOpen, onSelect, onHighlight, onToggleSelection, onBulkAction, helperActions = [], onReadTogether, onReplyTogether, onOrganizeSelection, onClearSelection, onRefresh, onNavigate, setAsideGroupTarget, onSetAsideGroup, hidden = false, showSenderAvatars = false }: ImboxViewProps) {
   const hint = useShortcutHints();
   const [query, setQuery] = useState("");
   const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
@@ -112,7 +113,13 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   }, [focusSection, isImbox]);
   useEffect(() => {
     if (!selectedId || hidden) return;
-    requestAnimationFrame(() => document.getElementById(`mail-row-${selectedId}`)?.scrollIntoView({ block: "nearest" }));
+    const row = document.getElementById(`mail-row-${selectedId}`);
+    // Escape returns focus to a row. Keep native Enter/Space on the same row
+    // as J/K, arrow-key and range-selection navigation, without stealing focus
+    // from search, toolbar controls or another pane.
+    if (document.activeElement?.matches(".mail-row")) row?.focus({ preventScroll: true });
+    const frame = requestAnimationFrame(() => row?.scrollIntoView({ block: "nearest" }));
+    return () => cancelAnimationFrame(frame);
   }, [hidden, selectedId]);
   useEffect(() => {
     if (!bulkMenuOpen) return;
@@ -140,7 +147,7 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   }, [hidden, setAsideGroupTarget, postings]);
 
   const bulkSelection = useMemo(() => new Set(bulkSelectedIds), [bulkSelectedIds]);
-  const renderRows = (rows: ImboxPosting[]) => rows.map((posting) => <MailRow showSenderAvatars={showSenderAvatars} key={posting.id} posting={posting} selectedId={selectedId} bulkSelected={bulkSelection.has(posting.id)} imbox={isImbox} onSelect={onSelect} onToggleSelection={onToggleSelection} />);
+  const renderRows = (rows: ImboxPosting[]) => rows.map((posting) => <MailRow showSenderAvatars={showSenderAvatars} key={posting.id} posting={posting} selectedId={selectedId} bulkSelected={bulkSelection.has(posting.id)} imbox={isImbox} onSelect={onSelect} onHighlight={onHighlight} onToggleSelection={onToggleSelection} />);
   const selectedPostings = postings.filter((posting) => bulkSelection.has(posting.id));
   const selectedGrouped = selectedPostings.some((posting) => Boolean(posting.boxGroupId));
   const renderSetAsideRows = () => <div className="set-aside-groups">

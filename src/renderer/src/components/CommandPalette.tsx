@@ -57,6 +57,7 @@ export default function CommandPalette({ commands, onRun, onClose }: CommandPale
 
   const move = (delta: number) => {
     if (visible.length === 0) return;
+    input.current?.focus();
     setActive((index) => nextCommandIndex(index, delta, visible.length));
   };
 
@@ -74,12 +75,12 @@ export default function CommandPalette({ commands, onRun, onClose }: CommandPale
       if (event.key === "Escape") { event.preventDefault(); event.stopImmediatePropagation(); onClose(); return; }
       if (event.key === "ArrowDown" || event.key === "Tab" && !event.shiftKey) { event.preventDefault(); event.stopImmediatePropagation(); move(1); return; }
       if (event.key === "ArrowUp" || event.key === "Tab" && event.shiftKey) { event.preventDefault(); event.stopImmediatePropagation(); move(-1); return; }
-      if (event.key === "Home") { event.preventDefault(); event.stopImmediatePropagation(); setActive(0); return; }
-      if (event.key === "End" && visible.length) { event.preventDefault(); event.stopImmediatePropagation(); setActive(visible.length - 1); return; }
-      if (event.key === "PageDown" && visible.length) { event.preventDefault(); event.stopImmediatePropagation(); setActive((value) => Math.min(value + 8, visible.length - 1)); return; }
-      if (event.key === "PageUp" && visible.length) { event.preventDefault(); event.stopImmediatePropagation(); setActive((value) => Math.max(value - 8, 0)); return; }
+      if (event.key === "Home") { event.preventDefault(); event.stopImmediatePropagation(); input.current?.focus(); setActive(0); return; }
+      if (event.key === "End" && visible.length) { event.preventDefault(); event.stopImmediatePropagation(); input.current?.focus(); setActive(visible.length - 1); return; }
+      if (event.key === "PageDown" && visible.length) { event.preventDefault(); event.stopImmediatePropagation(); input.current?.focus(); setActive((value) => Math.min(value + 8, visible.length - 1)); return; }
+      if (event.key === "PageUp" && visible.length) { event.preventDefault(); event.stopImmediatePropagation(); input.current?.focus(); setActive((value) => Math.max(value - 8, 0)); return; }
       const internalButton = event.target instanceof Element ? event.target.closest("button") : null;
-      if (event.key === "Enter" && visible[activeIndex] && (!internalButton || !scrim.current?.contains(internalButton))) {
+      if (event.key === "Enter" && visible[activeIndex] && (!internalButton || internalButton.hasAttribute("data-command-index") || !scrim.current?.contains(internalButton))) {
         event.preventDefault(); event.stopImmediatePropagation(); onRun(visible[activeIndex]!.id);
       }
     };
@@ -100,7 +101,7 @@ export default function CommandPalette({ commands, onRun, onClose }: CommandPale
         </header>
         <div ref={results} className="command-results" id="command-results" role="listbox" aria-label="Available commands">
           {visible.map((command, index) => (
-            <button id={`command-${command.id}`} data-command-index={index} key={command.id} type="button" role="option" tabIndex={-1} aria-selected={index === activeIndex} onMouseEnter={() => setActive(index)} onClick={() => onRun(command.id)}>
+            <button id={`command-${command.id}`} data-command-index={index} key={command.id} type="button" role="option" tabIndex={-1} aria-selected={index === activeIndex} onFocus={() => setActive(index)} onMouseEnter={() => setActive(index)} onClick={() => onRun(command.id)}>
               <span className="command-label">{command.label}</span>
               <span className="command-metadata">
                 {helperIdFromCommand(command.id) && <span className="command-kind">Helper</span>}

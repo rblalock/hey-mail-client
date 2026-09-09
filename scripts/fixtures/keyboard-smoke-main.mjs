@@ -5,6 +5,7 @@ import { checkDraftReview } from "./draft-review-smoke.mjs";
 import { checkAgentHandoff } from "./agent-handoff-smoke.mjs";
 import { checkReadOnOpen } from "./read-on-open-smoke.mjs";
 import { checkEmailEscape } from "./email-escape-smoke.mjs";
+import { checkListNavigation } from "./list-navigation-smoke.mjs";
 const url = process.env.HEY_KEYBOARD_PREVIEW_URL;
 if (!url?.startsWith("http://127.0.0.1:") || !process.env.XDG_CONFIG_HOME?.includes("/hey-keyboard-smoke-")) throw new Error("Disposable preview required.");
 app.whenReady().then(async () => {
@@ -104,6 +105,7 @@ app.whenReady().then(async () => {
     await window.loadURL(url);
     await until("Boolean(window.heyAgent && document.querySelector('.mail-row'))");
     await checkEmailEscape({ evaluate, until, click, fill, press });
+    await checkListNavigation({ window, url, evaluate, until, click, fill, press });
     app.exit(0);
   } catch (error) { console.error(error); console.error(await evaluate("JSON.stringify({keys:window.keyTrace,active:document.activeElement?.tagName})")); app.exit(1); }
 });
