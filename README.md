@@ -47,7 +47,7 @@ Plan events across your HEY calendars and keep tasks in Sometime This Week. Habi
 
 ### Review the wording before using it
 
-Compare your draft with the suggestion, switch to Draft to edit it, then choose **Use this draft**.
+Compare your draft with the suggestion and edit the suggested wording directly in **Changes**, or use the **Draft** view. Choose **Use this draft** when you're ready.
 
 ![Draft review showing removed and added wording side by side, with Draft and Changes tabs and an explicit Use this draft button.](docs/screenshots/draft-review.png)
 
