@@ -10,13 +10,15 @@ const scratch = await mkdtemp(join(tmpdir(), "hey-keyboard-smoke-"));
 const server = await createServer({ configFile: false, root: "src/renderer", plugins: [react(), tailwind()], server: { host: "127.0.0.1", port: 0 } });
 let child;
 let timeout;
+let timedOut = false;
 try {
   await server.listen();
   const address = server.httpServer.address();
   child = spawn(resolve("node_modules/electron/dist/electron"), ["--no-sandbox", "--disable-gpu", resolve("scripts/fixtures/keyboard-smoke-main.mjs")], {
     stdio: "inherit", env: { ...process.env, ELECTRON_RUN_AS_NODE: "", HEY_KEYBOARD_PREVIEW_URL: `http://127.0.0.1:${address.port}/?preview&theme=dusk`, XDG_CONFIG_HOME: join(scratch, "config"), XDG_DATA_HOME: join(scratch, "data"), XDG_STATE_HOME: join(scratch, "state") },
   });
-  timeout = setTimeout(() => child.kill("SIGTERM"), 50_000);
+  timeout = setTimeout(() => { timedOut = true; child.kill("SIGTERM"); }, 50_000);
   const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("exit", resolve); });
+  if (timedOut) throw new Error("Keyboard smoke timed out.");
   if (code !== 0) throw new Error(`Keyboard smoke failed (${code}).`);
 } finally { clearTimeout(timeout); await server.close(); await rm(scratch, { recursive: true, force: true }); }

@@ -29,6 +29,24 @@ export async function checkListNavigation({ window, url, evaluate, until, click,
   assert.equal(await evaluate("document.querySelector('.mail-row[data-bulk-selected=true]').dataset.postingId"), focusedMail);
 
   await fresh();
+  // Check focus transfer from controls and at list edges. This DOM test does not
+  // prove native Enter activation; that requires separate browser verification.
+  for (const [key, modifiers] of [['j', []], ['k', []], ['ArrowDown', []], ['ArrowUp', []], ['J', ['shift']], ['K', ['shift']], ['ArrowDown', ['shift']], ['ArrowUp', ['shift']]]) {
+    await focus('.sidebar-toggle');
+    await press(key, modifiers);
+    assert.equal(await evaluate("document.activeElement.matches('.mail-row[data-selected=true]')"), true, `${key} must transfer focus to the highlighted mail row`);
+  }
+  for (const [edge, key] of [['first', 'k'], ['last', 'j']]) {
+    const idAtEdge = await evaluate(`[...document.querySelectorAll('.mail-row')].at(${edge === 'first' ? 0 : -1}).dataset.postingId`);
+    await focus(`.mail-row[data-posting-id="${idAtEdge}"]`);
+    const id = await evaluate('document.activeElement.dataset.postingId');
+    await until(`document.querySelector('.mail-row[data-selected=true]')?.dataset.postingId === ${JSON.stringify(id)}`);
+    await focus('.sidebar-toggle');
+    await press(key);
+    assert.equal(await evaluate('document.activeElement.dataset.postingId'), id, `${key} must transfer focus even at the list edge`);
+  }
+
+  await fresh();
   await evaluate('document.activeElement.blur()'); await press('k', ['control']);
   await until("Boolean(document.querySelector('#command-palette-input'))");
   await fill('#command-palette-input', 'Go to Paper Trail');

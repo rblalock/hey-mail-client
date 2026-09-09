@@ -8,8 +8,13 @@ import { checkEmailEscape } from "./email-escape-smoke.mjs";
 import { checkListNavigation } from "./list-navigation-smoke.mjs";
 const url = process.env.HEY_KEYBOARD_PREVIEW_URL;
 if (!url?.startsWith("http://127.0.0.1:") || !process.env.XDG_CONFIG_HOME?.includes("/hey-keyboard-smoke-")) throw new Error("Disposable preview required.");
+// An unexpected window/app close is not a successful test run.
+// Explicit app.exit(0) below bypasses before-quit after all assertions finish.
+app.on("before-quit", () => app.exit(1));
 app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: false, width: 1500, height: 980, webPreferences: { backgroundThrottling: false } });
+  // Hidden windows still play audio. Mute the test contents before loading the app.
+  window.webContents.setAudioMuted(true);
   const evaluate = (code) => window.webContents.executeJavaScript(code);
   const until = async (code) => {
     for (let i = 0; i < 120; i++) { if (await evaluate(code)) return; await new Promise((resolve) => setTimeout(resolve, 30)); }
@@ -107,5 +112,5 @@ app.whenReady().then(async () => {
     await checkEmailEscape({ evaluate, until, click, fill, press });
     await checkListNavigation({ window, url, evaluate, until, click, fill, press });
     app.exit(0);
-  } catch (error) { console.error(error); console.error(await evaluate("JSON.stringify({keys:window.keyTrace,active:document.activeElement?.tagName})")); app.exit(1); }
+  } catch (error) { console.error(error); if (!window.isDestroyed()) console.error(await evaluate("JSON.stringify({keys:window.keyTrace,active:document.activeElement?.tagName})")); app.exit(1); }
 });

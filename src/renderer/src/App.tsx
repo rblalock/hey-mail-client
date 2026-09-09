@@ -505,7 +505,12 @@ export default function App() {
     const byId = new Map((mailbox?.postings ?? []).map((posting) => [posting.id, posting]));
     const visible = [...document.querySelectorAll<HTMLElement>('.imbox-panel:not([hidden]) .mail-row')].flatMap((row) => { const posting = byId.get(row.dataset.postingId!); return posting ? [posting] : []; });
     const next = moveMailboxCursor(visible, highlightedId, delta);
-    if (!next || next === highlightedId) return;
+    if (!next) return;
+    // Explicit list navigation takes keyboard focus, even when the cursor is
+    // already at an edge or a toolbar/sidebar button previously had focus.
+    // Otherwise Enter activates that old control instead of the highlighted row.
+    document.getElementById(`mail-row-${next}`)?.focus({ preventScroll: true });
+    if (next === highlightedId) return;
     appSound.play("hover", "interface", { cooldownMs: 70, retrigger: "restart" });
     setMailboxCursor((current) => ({ ...current, [activeMailbox]: next }));
   }, [activeMailbox, highlightedId, mailbox]);
@@ -835,7 +840,12 @@ export default function App() {
     if ((id === "select-next" || id === "select-previous") && !selected && !readTogether && activeMailbox) {
       const ids = [...document.querySelectorAll<HTMLElement>('.imbox-panel:not([hidden]) .mail-row')].map((row) => row.dataset.postingId!);
       const next = extendMailboxSelection(ids, highlightedId, id === "select-next" ? 1 : -1, bulkSelectedIds, selectionRange.current);
-      if (next) { selectionRange.current = next.range; setBulkSelectedIds(next.selected); setMailboxCursor((current) => ({ ...current, [activeMailbox]: next.edge })); }
+      if (next) {
+        selectionRange.current = next.range;
+        setBulkSelectedIds(next.selected);
+        setMailboxCursor((current) => ({ ...current, [activeMailbox]: next.edge }));
+        document.getElementById(`mail-row-${next.edge}`)?.focus({ preventScroll: true });
+      }
       return;
     }
     if (id === "select" && !selected && mailbox) {
