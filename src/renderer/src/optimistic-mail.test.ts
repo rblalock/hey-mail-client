@@ -25,6 +25,20 @@ function update(cache: MailboxCache, request: MailMutationRequest, cursor = "2")
 }
 
 describe("optimistic mail mutations", () => {
+  it("clears a returned bubble without removing its email or changing read state", () => {
+    const cache = { imbox: mailbox("imbox", [{ ...posting("1", true), bubbledUp: true }, posting("2", false)]) };
+    const result = update(cache, { operation: "bubble-pop", postingIds: ["1"], sourceBox: "imbox" });
+    expect(result.removedFromActiveMailbox).toBe(false);
+    expect(result.mailboxes.imbox?.postings[0]).toMatchObject({ id: "1", seen: true, bubbledUp: false });
+    expect(cache.imbox.postings[0]?.bubbledUp).toBe(true);
+  });
+  it("removes a canceled scheduled bubble from Bubble Up and keeps the next cursor", () => {
+    const cache = { bubblebox: mailbox("bubblebox", [posting("1", true), posting("2", true)]) };
+    const result = applyOptimisticMailMutation(cache, "bubblebox", "1", { operation: "bubble-pop", postingIds: ["1"], sourceBox: "bubblebox" });
+    expect(result.removedFromActiveMailbox).toBe(true);
+    expect(result.nextCursor).toBe("2");
+    expect(result.mailboxes.bubblebox?.postings.map((p) => p.id)).toEqual(["2"]);
+  });
   it("chooses only the following conversation for reader triage", () => {
     const postings = [posting("1", false), posting("2", false), posting("3", true)];
     expect(nextPostingInSequence(postings, "1")?.id).toBe("2");

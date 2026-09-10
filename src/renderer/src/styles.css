@@ -4058,13 +4058,24 @@ kbd {
 .mail-list-header { font-size: 10.5px; }
 .sender-copy strong,
 .subject-line strong { font-size: 14px; }
-.subject-line strong { font-weight: 450; }
+.subject-line strong { font-weight: 500; color: var(--ink); }
 .mail-row[data-unseen="true"] .subject-line strong,
 .mail-row[data-unseen="true"] .sender-copy strong { font-weight: 650; }
-.sender-copy small,
-.entry-count { font-size: 11px; }
+.sender-copy small { font-size: 11px; }
+.entry-count { font-size: 12px; font-weight: 550; color: var(--ink-2); }
+.recipient-count { flex: none; font-size: 12px; color: var(--ink-2); }
+.entry-recipient-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-size: 12px; }
+.entry-recipient-details { margin: 0 13px 16px; color: var(--ink-2); font-size: 12px; }
+.entry-recipient-details summary { width: fit-content; cursor: pointer; padding: 4px 0; }
+.entry-recipient-details summary:hover { color: var(--ink); }
+.entry-recipient-details ul { padding-left: 20px; margin: 8px 0; overflow-wrap: anywhere; }
+.thread-history-label { color: var(--ink-2); font-size: 13px; margin-block: 0 -12px; }
 .updated-cell { font-size: 12px; }
-.summary-line { font-size: 13px; }
+.summary-line { font-size: 13px; flex: 0 1 48ch; max-width: 48ch; }
+.mail-day-heading { display: flex; align-items: center; gap: 14px; padding: 24px 20px 8px; color: var(--ink-2); font-size: 13px; font-weight: 600; line-height: 1.5; }
+.mail-day-heading:first-child { padding-top: 16px; }
+.mail-day-heading::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.message-actions > button[aria-pressed="true"] { color: var(--accent); background: var(--hover); border-color: var(--accent); }
 .mail-row[data-selected="true"] :is(.summary-line, .entry-count, .updated-cell) { color: var(--ink-2); }
 .mail-row .sender-avatar { width: 24px; height: 24px; border-radius: 50%; box-shadow: none; }
 .mail-state-cell { position: relative; display: grid; place-items: center; align-self: stretch; min-height: 24px; }
@@ -4340,6 +4351,21 @@ button.entry-disclosure:focus-visible { outline: 2px solid var(--accent); outlin
   white-space: nowrap;
 }
 .entry-position { flex: none; color: var(--ink-3); font-size: 8.5px; font-variant-numeric: tabular-nums; }
+.entry-attachment-count { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--ink-2); font-size: 12px; }
+.received-attachments { margin: 16px 13px; }
+.received-attachments h3 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.received-attachments ul { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.received-attachment { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.received-attachment > svg { flex: none; color: var(--ink-2); }
+.received-attachment-info { display: grid; gap: 4px; flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
+.received-attachment-info strong { font-size: 14px; font-weight: 600; color: var(--ink); }
+.received-attachment-info span { font-size: 12px; color: var(--ink-2); }
+.received-attachment-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.received-attachment-actions .secondary-button { min-height: 34px; font-size: 13px; }
+.received-attachment-status { flex-basis: 100%; margin: 0; color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
+.mail-invite-preview { flex-basis: 100%; min-width: 0; border-top: 1px solid var(--line); padding-top: 16px; overflow-wrap: anywhere; }
+.mail-invite-preview h4 { font-size: 16px; margin: 0 0 8px; color: var(--ink); }
+.mail-invite-preview p { font-size: 14px; line-height: 1.5; color: var(--ink-2); margin: 8px 0; }
 .thread-entry.is-expanded .entry-position { display: none; }
 .entry-chevron { flex: none; color: var(--ink-3); }
 .pending-reply { opacity: 0.82; }

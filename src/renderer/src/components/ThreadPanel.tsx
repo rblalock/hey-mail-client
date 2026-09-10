@@ -1,7 +1,7 @@
 import { focusRecipient, useComposerKeyboard } from "../composer-keyboard";
 import { useShortcutHints } from "../shortcut-context";
 import {
-  ArrowLeft, ArrowUpCircle, BellOff, ChevronDown, ChevronsUpDown, ChevronUp, Clock3, EyeOff, ExternalLink,
+  ArrowLeft, ArrowUpCircle, Bell, BellOff, Check, ChevronDown, ChevronsUpDown, ChevronUp, Clock3, Eye, EyeOff, ExternalLink,
   FileClock, Forward, MoreHorizontal, Paperclip, Reply, Save, Send, ShieldAlert, Sparkles, Tag, Trash2, X,
 } from "lucide-react";
 import { ChevronDown as ChevronDownData, ChevronRight as ChevronRightData } from "lucide";
@@ -20,6 +20,9 @@ import ComposerWritingAssistant, { type ComposerWritingHandle } from "./Composer
 import DraftReviewDialog from "./DraftReviewDialog";
 import { draftReviewIssue, type DraftSuggestion } from "../draft-review";
 import EmailBody from "./EmailBody";
+import EmailAttachments from "./EmailAttachments";
+import { mailToggle } from "../mail-toggles";
+import { contactDetails, contactLabel, currentMailEmail, entryAddressedContacts } from "../mail-presentation";
 import MorphingIcon from "./MorphingIcon";
 import RecipientField, { parseRecipients } from "./RecipientField";
 import { ContactObjectLink } from "./SmartObjectLink";
@@ -194,6 +197,10 @@ export default function ThreadPanel({
     setReplyExpanded(true);
   }, [replyDraftSeed]);
 
+  const laterToggle = mailToggle("later", [posting.id], mailActions?.sourceBox ?? "imbox", [posting])!;
+  const asideToggle = mailToggle("aside", [posting.id], mailActions?.sourceBox ?? "imbox", [posting])!;
+  const bubbleToggle = mailToggle("bubble", [posting.id], mailActions?.sourceBox ?? "imbox", [posting])!;
+  const readToggle = mailToggle("unread", [posting.id], mailActions?.sourceBox ?? "imbox", [posting])!;
   const entries = useMemo(() => (thread?.entries ?? []).map((entry) => ({
     ...entry,
     sender: enrichContactAvatar(entry.sender, posting.contacts),
@@ -214,6 +221,7 @@ export default function ThreadPanel({
   const displayError = error ?? threadError;
   const showPendingReply = Boolean(pendingReply && (!thread || !hasNewThreadEntry(pendingReply.previousThread, thread)));
   const olderEntries = entries.slice(0, -1);
+  const selfEmail = currentMailEmail();
   const latestEntryId = entries.at(-1)?.id;
   const allOlderExpanded = olderEntries.length > 0 && olderEntries.every((entry) => expandedOlderEntries.has(entry.id));
   const writingThreadContext = useMemo(() => thread?.entries.slice(-4).map((entry) => `${entry.sender.name}: ${entry.body}`).join("\n\n").slice(0, 24_000), [thread]);
@@ -338,8 +346,8 @@ export default function ThreadPanel({
           {(mailActions || onOrganize || supplementalActions || helperActions.length > 0) && <div className="message-actions">
             {mailActions && <>
             <button type="button" aria-expanded={replyExpanded} data-tooltip="Reply" data-shortcut-id="reply" onClick={openReply}><Reply size={14} /> Reply</button>
-            <button type="button" data-tooltip="Move to Reply Later" data-shortcut-id="later" onClick={() => mailActions.onMutate({ operation: "move", postingIds: [posting.id], destination: "laterbox", sourceBox: mailActions.sourceBox })}><Clock3 size={14} /> Later</button>
-            <button type="button" data-tooltip="Set aside" data-shortcut-id="aside" onClick={() => mailActions.onMutate({ operation: "move", postingIds: [posting.id], destination: "asidebox", sourceBox: mailActions.sourceBox })}><FileClock size={14} /> Set Aside</button>
+            <button type="button" aria-pressed={laterToggle.active} aria-label={laterToggle.label} data-tooltip={laterToggle.label} data-shortcut-id="later" onClick={() => mailActions.onMutate(laterToggle.request)}>{laterToggle.active ? <Check size={14} /> : <Clock3 size={14} />} Reply Later</button>
+            <button type="button" aria-pressed={asideToggle.active} aria-label={asideToggle.label} data-tooltip={asideToggle.label} data-shortcut-id="aside" onClick={() => mailActions.onMutate(asideToggle.request)}>{asideToggle.active ? <Check size={14} /> : <FileClock size={14} />} Set Aside</button>
             </>}
             {(mailActions || onOrganize || helperActions.length > 0) &&
             <span className="message-menu">
@@ -354,12 +362,13 @@ export default function ThreadPanel({
                 }}><ChevronsUpDown size={14} /> {allOlderExpanded ? "Collapse older messages" : "Expand all messages"}</button>}
                 {onOrganize && <button type="button" onClick={() => { setMenuOpen(false); onOrganize(); }}><Tag size={14} /> Labels &amp; Collections</button>}
                 {mailActions && <>
-                <button type="button" data-tooltip="Mark unread" data-shortcut-id="unread" data-tooltip-side="left" onClick={() => { setMenuOpen(false); mailActions.onMutate({ operation: "unseen", postingIds: [posting.id] }); }}><EyeOff size={14} /> Mark unread</button>
+                <button type="button" data-tooltip={readToggle.label} data-shortcut-id="unread" data-tooltip-side="left" onClick={() => { setMenuOpen(false); mailActions.onMutate(readToggle.request); }}>{readToggle.active ? <Eye size={14} /> : <EyeOff size={14} />} {readToggle.label}</button>
                 <button type="button" data-tooltip="Forward" data-shortcut-id="forward" data-tooltip-side="left" onClick={() => { setMenuOpen(false); mailActions.onForward(); }}><Forward size={14} /> Forward</button>
-                <button type="button" data-tooltip="Bubble up tomorrow" data-shortcut-id="bubble" data-tooltip-side="left" onClick={() => { setMenuOpen(false); mailActions.onMutate({ operation: "bubble", postingIds: [posting.id], bubbleSchedule: "tomorrow", sourceBox: mailActions.sourceBox }); }}><ArrowUpCircle size={14} /> Bubble up tomorrow</button>
+                <button type="button" aria-pressed={bubbleToggle.active} data-tooltip={bubbleToggle.label} data-shortcut-id="bubble" data-tooltip-side="left" onClick={() => { setMenuOpen(false); mailActions.onMutate(bubbleToggle.request); }}><ArrowUpCircle size={14} /> {bubbleToggle.label}</button>
                 <button type="button" onClick={() => { setMenuOpen(false); mailActions.onMutate({ operation: "bubble", postingIds: [posting.id], bubbleSchedule: "weekend", sourceBox: mailActions.sourceBox }); }}><ArrowUpCircle size={14} /> Bubble up this weekend</button>
                 {posting.appUrl && <button type="button" onClick={() => { setMenuOpen(false); void window.heyAgent.system.openHeyUrl(posting.appUrl!); }}><ExternalLink size={14} /> Open in HEY</button>}
                 <button type="button" onClick={() => { setMenuOpen(false); mailActions.onMutate({ operation: "ignore", postingIds: [posting.id] }); }}><BellOff size={14} /> Ignore thread</button>
+                <button type="button" data-tooltip="Stop ignoring thread" data-shortcut-id="stop-ignoring" onClick={() => { setMenuOpen(false); mailActions.onMutate({ operation: "stop-ignoring", postingIds: [posting.id] }); }}><Bell size={14} /> Stop ignoring thread</button>
                 <button type="button" data-tooltip="Move to Trash" data-shortcut-id="trash" data-tooltip-side="left" onClick={() => { setMenuOpen(false); mailActions.onMutate({ operation: "trash", postingIds: [posting.id], sourceBox: mailActions.sourceBox }); }}><Trash2 size={14} /> Trash</button>
                 <button type="button" onClick={() => { setMenuOpen(false); mailActions.onMutate({ operation: "spam", postingIds: [posting.id], sourceBox: mailActions.sourceBox }); }}><ShieldAlert size={14} /> Mark spam</button>
                 </>}
@@ -374,16 +383,22 @@ export default function ThreadPanel({
           {!thread && !displayError && <div className="thread-loading thread-reading-column"><span />Loading conversation…</div>}
           {displayError && <div className="thread-notice thread-reading-column">{displayError}{threadError && posting.topicId && <button type="button" className="secondary-button" onClick={onRetryThread}>Try again</button>}</div>}
           {thread?.entries.length === 0 && <p className="message-body thread-reading-column">{posting.summary || "No message text was returned by HEY."}</p>}
+          {thread?.attachmentsError && <div className="thread-notice thread-reading-column" role="alert">{thread.attachmentsError}{onRetryThread && <button type="button" className="secondary-button" onClick={onRetryThread}>Reload</button>}</div>}
+          {olderEntries.length > 0 && <p className="thread-history-label thread-reading-column">{olderEntries.length} earlier {olderEntries.length === 1 ? "message" : "messages"}</p>}
           {entries.map((entry, index) => {
             const latest = index === entries.length - 1;
             const expanded = latest || expandedOlderEntries.has(entry.id);
+            const senderName = contactLabel(entry.sender, selfEmail);
+            const recipients = entryAddressedContacts(posting, entry, latest, entries.length);
             const sender = latest
-              ? <ContactObjectLink contact={entry.sender} onOpenObject={onOpenObject} className="entry-sender-contact"><strong>From: {entry.sender.name}</strong>{entry.sender.email && <small>{entry.sender.email}</small>}</ContactObjectLink>
-              : <><strong>From: {entry.sender.name}</strong>{entry.sender.email && <small>{entry.sender.email}</small>}</>;
+              ? <ContactObjectLink contact={entry.sender} onOpenObject={onOpenObject} className="entry-sender-contact"><strong title={contactDetails(entry.sender)}>{senderName}</strong>{!recipients.length && entry.sender.email && <small>{entry.sender.email}</small>}</ContactObjectLink>
+              : <><strong title={contactDetails(entry.sender)}>{senderName}</strong>{entry.sender.email && <small>{entry.sender.email}</small>}</>;
             const meta = <>
               <span className="entry-sender"><ContactAvatar className="entry-avatar" contact={entry.sender} />{sender}</span>
+              {recipients.length > 0 && <span className="entry-recipient-summary" title={recipients.map(contactDetails).join(", ")}>→ {recipients.map((contact) => contactLabel(contact, selfEmail)).join(", ")}</span>}
               {!expanded && <span className="entry-preview">{entryPreview(entry.body, posting.summary)}</span>}
               <span className="entry-position">{index + 1} of {entries.length}</span>
+              {!!entry.attachments?.length && <span className="entry-attachment-count" aria-label={`${entry.attachments.length} attachments`}><Paperclip size={13} aria-hidden="true" />{entry.attachments.length}</span>}
               <time dateTime={entry.occurredAt}>{formatEntryTime(entry.occurredAt)}</time>
               {!latest && <MorphingIcon className="entry-chevron" icon={expanded ? ChevronDownData : ChevronRightData} size={15} />}
             </>;
@@ -391,7 +406,12 @@ export default function ThreadPanel({
               {latest
                 ? <div className="entry-meta entry-disclosure">{meta}</div>
                 : <button type="button" className="entry-meta entry-disclosure" aria-expanded={expanded} onClick={() => toggleOlderEntry(entry.id)}>{meta}</button>}
+              {latest && recipients.length > 0 && <details className="entry-recipient-details">
+                <summary>Recipients ({recipients.length})</summary>
+                <ul>{recipients.map((contact, recipientIndex) => <li key={recipientIndex}>{contactDetails(contact)}</li>)}</ul>
+              </details>}
               {expanded && <EmailBody entry={entry} onReaderKeyDown={readerKeyDown} onOpenObject={onOpenObject} />}
+              {expanded && thread && <EmailAttachments topicId={thread.topicId} attachments={entry.attachments} />}
             </article>;
           })}
           {showPendingReply && pendingReply && <article ref={pendingReplyElement} className="thread-entry thread-reading-column pending-reply" aria-label="Sent reply syncing with HEY">

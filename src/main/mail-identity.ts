@@ -86,13 +86,16 @@ export function resolveMailSender(itemValue: unknown, options: ResolveMailSender
   const item = record(itemValue);
   const raw = record(item.sender ?? item.creator ?? item.contact);
   const direct = Object.keys(raw).length > 0 ? mailContactFrom(raw) : undefined;
-  const base = direct?.kind === "User" && options.fallback ? options.fallback : direct ?? options.fallback ?? mailContactFrom(undefined);
   const summary = options.summary ?? "";
   const subject = options.subject ?? "";
-  const actor = cleanName(options.explicitName)
-    ?? cleanName(item.alternative_sender_name)
-    ?? invitationActorFromSummary(subject, summary)
-    ?? actorFromSummary(summary);
+  const explicitActor = cleanName(options.explicitName) ?? cleanName(item.alternative_sender_name);
+  // A User creator can be the author of an outgoing message, not just the
+  // mailbox owner. Never pair that author's name with a recipient's avatar.
+  const differentActor = explicitActor && direct && explicitActor.toLocaleLowerCase() !== direct.name.toLocaleLowerCase();
+  const base = direct?.kind === "User" && differentActor && options.fallback
+    ? options.fallback : direct ?? options.fallback ?? mailContactFrom(undefined);
+  const actor = explicitActor ?? (direct?.kind === "User" ? undefined
+    : invitationActorFromSummary(subject, summary) ?? actorFromSummary(summary));
   return actor ? { ...base, name: actor } : base;
 }
 

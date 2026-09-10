@@ -376,6 +376,9 @@ export function previewApi(): HeyAgentApi {
       undoBulkReply: async () => ({ message: "Bulk reply recalled in HEY.", undone: true }),
       unbundleContact: async () => ({ message: "Mail from this contact will appear separately." }),
       selectAttachments: async () => [],
+      openAttachment: async () => { throw new Error("Attachment opening is unavailable in the preview."); },
+      previewCalendarInvite: async () => { throw new Error("Calendar attachment previews require HEY."); },
+      saveAttachment: async () => ({ cancelled: true }),
       subscribe: () => () => undefined,
     },
     calendar: {

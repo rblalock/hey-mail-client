@@ -4,6 +4,7 @@ import type {
   ScreenerDecisionRequest, ScreenerResult, ThreadEntry,
 } from "../shared/contracts";
 import { parseThreadHtmlDocument } from "./email-html";
+import { listMailAttachments, withMailAttachments } from "./mail-attachments";
 import { applyExplicitSenderName, mailContactFrom, resolveMailSender } from "./mail-identity";
 import { findExecutable, runFile, runFileWithInput } from "./profile-process";
 
@@ -103,6 +104,7 @@ function postingFrom(value: unknown): ImboxPosting {
     ...(posting.bubbled_up === true ? { bubbledUp: true } : {}),
     createdAt: normalizeHeyTimestamp(stringValue(posting.active_at, stringValue(posting.created_at))),
     contacts,
+    ...(Array.isArray(posting.addressed_contacts) ? { addressedContacts: posting.addressed_contacts.map(mailContactFrom) } : {}),
     sender,
     visibleEntryCount: numberValue(posting.visible_entry_count, 1),
   };
@@ -784,7 +786,8 @@ export async function mutateMail(request: MailMutationRequest, env: NodeJS.Proce
 
 export function mutationCommand(request: MailMutationRequest): string[] {
   const postingIds = assertPostingIds(request.postingIds);
-  const args = request.operation === "bubble" ? ["bubble", "up", ...postingIds] : [request.operation, ...postingIds];
+  const args = request.operation === "bubble" ? ["bubble", "up", ...postingIds]
+    : request.operation === "bubble-pop" ? ["bubble", "pop", ...postingIds] : [request.operation, ...postingIds];
   if (request.operation === "move") {
     if (!request.destination || !MOVE_DESTINATIONS.has(request.destination)) throw new Error("A valid HEY destination is required.");
     args.push("--to", request.destination);
@@ -983,6 +986,10 @@ export async function readThread(topicId: string, env: NodeJS.ProcessEnv = proce
   const executable = await findExecutable("hey", env);
   if (!executable) throw new Error("HEY CLI is unavailable.");
 
+  const attachmentRequest = listMailAttachments(topicId, env).then(
+    (attachments) => ({ attachments }),
+    () => ({ attachmentsError: "Attachments couldn’t be loaded. Reload the conversation to try again." }),
+  );
   const htmlRequest = options.includeHtml
     ? runFile(executable, threadCommand(topicId, "html"), { env, timeoutMs: 30_000 }).then((result) => result.stdout).catch(() => undefined)
     : undefined;
@@ -990,7 +997,11 @@ export async function readThread(topicId: string, env: NodeJS.ProcessEnv = proce
     env,
     timeoutMs: 20_000,
   });
-  const thread = parseThreadJson(topicId, stdout);
+  const parsedThread = parseThreadJson(topicId, stdout);
+  const attachmentResult = await attachmentRequest;
+  const thread = "attachments" in attachmentResult
+    ? withMailAttachments(parsedThread, attachmentResult.attachments)
+    : { ...parsedThread, ...attachmentResult };
   if (!htmlRequest) return thread;
 
   const html = await htmlRequest;
@@ -1001,7 +1012,7 @@ export async function readThread(topicId: string, env: NodeJS.ProcessEnv = proce
     entries: thread.entries.map((entry) => {
       const parsed = rich.get(entry.id);
       if (!parsed) return entry;
-      const { senderName, occurredAt, ...body } = parsed;
+      const { senderName, occurredAt, attachmentNames, ...body } = parsed;
       return {
         ...entry,
         ...body,
@@ -1009,6 +1020,9 @@ export async function readThread(topicId: string, env: NodeJS.ProcessEnv = proce
         ...(occurredAt ? { occurredAt: normalizeHeyTimestamp(occurredAt) } : {}),
       };
     }),
+    ...([...rich.entries()].some(([id, parsed]) => parsed.attachmentNames?.some((name) =>
+      !thread.entries.find((entry) => entry.id === id)?.attachments?.some((file) => file.filename === name)))
+      ? { attachmentsError: thread.attachmentsError ?? "This message contains files that HEY CLI did not return. Update HEY CLI to 1.4.3 or newer, then reload. You can also open the conversation in HEY." } : {}),
   };
 }
 

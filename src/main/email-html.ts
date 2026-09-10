@@ -2,6 +2,7 @@ import { load } from "cheerio";
 import sanitizeHtml from "sanitize-html";
 
 export type ParsedEmailEntry = {
+  attachmentNames?: string[];
   senderName?: string;
   occurredAt?: string;
   html?: string;
@@ -187,6 +188,11 @@ function expandTrixAttachments(fragment: ReturnType<typeof load>): void {
           else replacement("figcaption").remove();
           fragment(figure).replaceWith(replacement.html());
           expanded = true;
+        } else if (typeof attachment.filename === "string") {
+          const replacement = load('<p class="email-file-placeholder"></p>', null, false);
+          replacement("p").text(`Attachment: ${attachment.filename}`);
+          fragment(figure).replaceWith(replacement.html());
+          expanded = true;
         }
       } catch {
         // A malformed attachment must not prevent the rest of the message from rendering.
@@ -264,7 +270,7 @@ function hasBlockedRemoteContent(fragment: string): boolean {
 function needsDocumentRendering(html: string): boolean {
   const images = (html.match(/<img\b/gi) ?? []).length;
   const tables = (html.match(/<table\b/gi) ?? []).length;
-  return images > 0 || tables > 1 || /<style\b/i.test(html) || html.length > 12_000;
+  return images > 0 || tables > 1 || /<style\b|email-file-placeholder/i.test(html) || html.length > 12_000;
 }
 
 function headerMetadata(value: string): Pick<ParsedEmailEntry, "senderName" | "occurredAt"> {
@@ -295,12 +301,24 @@ export function parseThreadHtmlDocument(stdout: string): Map<string, ParsedEmail
     });
     const htmlPresentation = visibleChildren.length <= 1 ? "document" : "card";
     expandTrixAttachments(articleBody);
+    articleBody("action-text-attachment").each((_attachmentIndex, element) => {
+      const node = articleBody(element);
+      const contentType = node.attr("content-type") ?? "";
+      const filename = node.attr("filename") ?? "";
+      if (contentType === "image" || contentType.startsWith("image/")) return;
+      if (!contentType && (!filename || /\.(png|jpe?g|gif|webp|avif)$/i.test(filename))) return;
+      const replacement = load('<p class="email-file-placeholder"></p>', null, false);
+      replacement("p").text(filename ? `Attachment: ${filename}` : "Attachment");
+      node.replaceWith(replacement.html());
+    });
     articleBody("figure").filter((_figureIndex, figure) => {
       const node = articleBody(figure);
       return node.text().trim().length === 0 && (node.html() ?? "").trim().length === 0;
     }).remove();
     const serialized = articleBody.html() ?? "";
     const fragment = normalizeHeyHtmlFragment(serialized);
+    const attachmentNames = load(fragment)(".email-file-placeholder").map((_i, el) => load(el).text().replace(/^Attachment:\s*/, "").trim()).get().filter(Boolean);
+    if (attachmentNames.length) Object.assign(metadata, { attachmentNames });
     if (!fragment.trim() || fragment.length > MAX_ENTRY_LENGTH) {
       if (Object.keys(metadata).length > 0) result.set(id, metadata);
       return;

@@ -43,6 +43,7 @@ export type ImboxPosting = {
   bubbledUp?: boolean;
   createdAt: string;
   contacts: MailContact[];
+  addressedContacts?: MailContact[];
   sender: MailContact;
   visibleEntryCount: number;
 };
@@ -124,6 +125,15 @@ export type CalendarEventCreateRequest = {
 export type CalendarEventCreateResult = {
   message: string;
   eventId?: string;
+};
+
+export type MailCalendarInvite = {
+  title: string;
+  when: string;
+  location?: string;
+  organizer?: string;
+  copy?: CalendarEventCreateRequest;
+  notice?: string;
 };
 
 export type CalendarEventUpdateRequest = {
@@ -274,7 +284,7 @@ export type SetAsideGroupMutationRequest = {
 
 export type BubbleSchedule = "now" | "tomorrow" | "weekend" | "next-week";
 
-export type MailOperation = "move" | "bubble" | "seen" | "unseen" | "trash" | "spam" | "ignore" | "stop-ignoring";
+export type MailOperation = "move" | "bubble" | "bubble-pop" | "seen" | "unseen" | "trash" | "spam" | "ignore" | "stop-ignoring";
 
 export type MailMutationRequest = {
   operation: MailOperation;
@@ -566,6 +576,14 @@ export type MailDraftUpdate = {
   body?: string;
 };
 
+export type MailAttachment = {
+  id: string;
+  messageId: string;
+  filename: string;
+  contentType: string;
+  byteSize?: number;
+};
+
 export type ThreadEntry = {
   id: string;
   sender: MailContact;
@@ -575,12 +593,14 @@ export type ThreadEntry = {
   remoteHtml?: string;
   hasRemoteContent?: boolean;
   htmlPresentation?: "card" | "document";
+  attachments?: MailAttachment[];
 };
 
 export type MailThread = {
   topicId: string;
   subject: string;
   entries: ThreadEntry[];
+  attachmentsError?: string;
 };
 
 export type ThemeSnapshot = {
@@ -890,6 +910,9 @@ export type HeyAgentApi = {
     deleteDraft(id: string): Promise<{ message: string }>;
     getReplyContext(postingId: string): Promise<MailReplyContext>;
     readThread(topicId: string): Promise<MailThread>;
+    openAttachment(topicId: string, attachmentId: string): Promise<void>;
+    previewCalendarInvite(topicId: string, attachmentId: string): Promise<MailCalendarInvite>;
+    saveAttachment(topicId: string, attachmentId: string): Promise<{ cancelled: boolean }>;
     mutate(request: MailMutationRequest): Promise<MailMutationResult>;
     send(request: MailSendRequest): Promise<MailSendResult>;
     previewBulkReply(postingIds: string[]): Promise<BulkReplyPreview>;

@@ -16,6 +16,7 @@ export function nextPostingInSequence(postings: ImboxPosting[], currentId: strin
 function mutationDestination(request: MailMutationRequest): MailboxKey | undefined {
   if (request.operation === "move") return request.destination;
   if (request.operation === "bubble") return request.bubbleSchedule === "now" ? "imbox" : "bubblebox";
+  if (request.operation === "bubble-pop" && request.sourceBox === "bubblebox") return "imbox";
   return undefined;
 }
 
@@ -33,6 +34,15 @@ export function applyOptimisticMailMutation(
 ): OptimisticMailResult {
   const postingIds = new Set(request.postingIds);
   let mailboxes = current;
+
+  if (request.operation === "bubble-pop") {
+    for (const key of Object.keys(current) as MailboxKey[]) {
+      const mailbox = current[key];
+      if (!mailbox || !mailbox.postings.some((posting) => postingIds.has(posting.id) && posting.bubbledUp)) continue;
+      if (mailboxes === current) mailboxes = { ...current };
+      mailboxes[key] = { ...mailbox, postings: mailbox.postings.map((posting) => postingIds.has(posting.id) ? { ...posting, bubbledUp: false } : posting) };
+    }
+  }
 
   if (request.operation === "seen" || request.operation === "unseen") {
     const seen = request.operation === "seen";

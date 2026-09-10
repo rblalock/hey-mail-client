@@ -5,6 +5,13 @@ const create = () => new HeyAccountScope("101", "https://app.hey.com");
 const own = (scope: HeyAccountScope) => scope.learn(["box", "view", "imbox", "--json"], result([{ id: 11, topic_id: 21, account_id: 101 }]).stdout);
 
 describe("shared native and Pi account guard", () => {
+  it("guards the reverse directions of mail actions", async () => {
+    const scope = create(); own(scope);
+    for (const args of [["bubble", "pop", "11", "--json"], ["stop-ignoring", "11", "--json"], ["move", "11", "--to", "imbox", "--json"]]) {
+      expect(await scope.prepare(args, vi.fn())).toEqual(["--account", "101", "--base-url", "https://app.hey.com", ...args]);
+      await expect(new HeyAccountScope("202", "https://app.hey.com").prepare(args, async () => result([]))).rejects.toThrow("not been verified");
+    }
+  });
   it("scopes list, search, new mail and identity-wide Calendar without changing global selection", async () => {
     const scope = create(); const read = vi.fn();
     for (const args of [["box", "list", "--json"], ["search", "meeting", "--json"], ["compose", "--to", "friend@example.com"], ["event", "week", "2026-09-05"]]) {
@@ -40,6 +47,9 @@ describe("shared native and Pi account guard", () => {
     scope.learn(["thread", "read", "21"], result([{ id: 31 }]).stdout);
     scope.learn(["attachment", "list", "21"], result([{ id: "31:1" }]).stdout);
     await scope.prepare(["attachment", "save", "31:1"], vi.fn());
+    const embedded = `31:e-${Buffer.alloc(32, 1).toString("base64url")}`;
+    scope.learn(["attachment", "list", "21"], result([{ id: embedded }]).stdout);
+    await scope.prepare(["attachment", "save", embedded], vi.fn());
     await scope.prepare(["clip", "create", "31", "--content", "quote"], vi.fn());
     for (const kind of ["contact", "draft", "snippet"]) {
       const read = vi.fn(async () => result([{ id: 51, account_id: 101 }]));

@@ -27,6 +27,9 @@ import { ThemeWatcher } from "./theme-watcher";
 import { installWindowZoom } from "./window-zoom";
 import { AccountProfiles } from "./account-profiles";
 import { profileRequest } from "./profile-process";
+import { cleanupMailAttachmentDownloads, downloadMailAttachment, resolveMailAttachment, saveMailAttachment } from "./mail-attachments";
+import { canOpenMailAttachment } from "../shared/mail-attachments";
+import { previewCalendarInvite } from "./mail-calendar-invite";
 import { HeyAccountScope } from "../../resources/hey-account-scope.mjs";
 import { acknowledgeHeyWrites, pendingHeyWrites } from "../../resources/hey-write-receipts.mjs";
 
@@ -200,6 +203,27 @@ function registerIpc(): void {
   handle("mail:read-thread", (_event, topicId) => {
     if (typeof topicId !== "string") throw new Error("A HEY topic ID is required.");
     return readThread(topicId, process.env, { includeHtml: true });
+  });
+  handle("mail:open-attachment", async (_event, topicId, attachmentId) => {
+    const file = await resolveMailAttachment(topicId, attachmentId);
+    if (!canOpenMailAttachment(file)) throw new Error("Save this file to inspect it before opening it.");
+    const download = await downloadMailAttachment(file);
+    try {
+      const error = await shell.openPath(download.path);
+      if (error) throw new Error("No application could open this file. Save it and open it from your file manager.");
+    } catch (error) {
+      await download.cleanup();
+      throw error;
+    }
+  });
+  handle("mail:preview-calendar-invite", (_event, topicId, attachmentId) => previewCalendarInvite(topicId, attachmentId));
+  handle("mail:save-attachment", async (_event, topicId, attachmentId) => {
+    if (!mainWindow) return { cancelled: true };
+    const file = await resolveMailAttachment(topicId, attachmentId);
+    const choice = await dialog.showSaveDialog(mainWindow, { title: "Save attachment", defaultPath: join(app.getPath("downloads"), file.filename) });
+    if (choice.canceled || !choice.filePath) return { cancelled: true };
+    await saveMailAttachment(file, choice.filePath);
+    return { cancelled: false };
   });
   handle("mail:mutate", (_event, request) => {
     if (!isMailMutation(request)) throw new Error("Invalid HEY mail action.");
@@ -409,7 +433,7 @@ function registerIpc(): void {
 function isMailMutation(value: unknown): value is MailMutationRequest {
   if (!value || typeof value !== "object") return false;
   const request = value as Partial<MailMutationRequest>;
-  return ["move", "bubble", "seen", "unseen", "trash", "spam", "ignore", "stop-ignoring"].includes(request.operation ?? "")
+  return ["move", "bubble", "bubble-pop", "seen", "unseen", "trash", "spam", "ignore", "stop-ignoring"].includes(request.operation ?? "")
     && Array.isArray(request.postingIds)
     && request.postingIds.length > 0
     && request.postingIds.length <= 100
@@ -636,6 +660,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  cleanupMailAttachmentDownloads();
   themeWatcher.stop();
   heyWatcher?.stop();
   agent?.stop();

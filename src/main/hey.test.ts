@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { addressedReplyDraftCommand, bulkReplyPreviewCommand, bulkReplySendCommand, bulkReplyUndoCommand, libraryCommand, librarySourceCommand, mailboxCommand, mutationCommand, normalizeHeyTimestamp, organizationMutationCommand, organizationViewCommand, parseBulkReplyPreviewJson, parseBulkReplySendJson, parseContactJson, parseDraftJson, parseDraftListJson, parseImboxJson, parseLibraryJson, parseLibrarySourceJson, parseReplyContextJson, parseScreenerJson, parseSearchFiltersJson, parseSearchJson, parseThreadJson, parseThreadListingJson, readableText, replyContextCommand, searchCommand, setAsideGroupCommand, threadCommand, threadListingCommand } from "./hey";
 
 describe("HEY JSON parsing", () => {
+  it("keeps the outgoing creator's identity and the actual addressed contacts together", () => {
+    const creator = { id: 1, name: "Alex Example", email_address: "alex@example.test", contactable_type: "User", initials: "AE", avatar_url: "https://app.hey.com/avatars/1.png" };
+    const recipient = { id: 2, name: "Membership", email_address: "membership@example.test", initials: "M" };
+    const result = parseImboxJson(JSON.stringify({ data: { postings: [{ id: 10, creator, alternative_sender_name: "Alex Example", contacts: [creator, recipient], addressed_contacts: [recipient] }] } }));
+    expect(result.postings[0]?.sender).toMatchObject({ id: "1", email: "alex@example.test", initials: "AE", avatarUrl: creator.avatar_url });
+    expect(result.postings[0]?.addressedContacts).toEqual([{ id: "2", name: "Membership", email: "membership@example.test", initials: "M" }]);
+    expect(parseImboxJson(JSON.stringify({ data: { postings: [{ id: 10 }] } })).postings[0]?.addressedContacts).toBeUndefined();
+  });
   it("preserves returned Bubble Up status without inferring it from a schedule", () => {
     const result = parseImboxJson(JSON.stringify({ data: { postings: [
       { id: 1, bubbled_up: true },
@@ -57,6 +65,8 @@ describe("HEY JSON parsing", () => {
 
   it("uses HEY's dedicated Bubble Up command instead of treating it as a box move", () => {
     expect(mutationCommand({ operation: "bubble", postingIds: ["12"], bubbleSchedule: "tomorrow" })).toEqual(["bubble", "up", "12", "--tomorrow", "--json"]);
+    expect(mutationCommand({ operation: "bubble-pop", postingIds: ["12", "13"] })).toEqual(["bubble", "pop", "12", "13", "--json"]);
+    expect(mutationCommand({ operation: "stop-ignoring", postingIds: ["12"] })).toEqual(["stop-ignoring", "12", "--json"]);
   });
 
   it("accepts HEY's array-shaped thread response", () => {

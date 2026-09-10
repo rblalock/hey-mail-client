@@ -89,10 +89,10 @@ HEY-like defaults on Linux. Single-letter shortcuts work outside text fields. Th
 | `R` | Reply |
 | `F` | Forward |
 | `E` | Mark seen |
-| `U` | Mark unseen |
-| `L` or `H` | Move to Reply Later |
-| `A` | Set Aside |
-| `Z` | Bubble up tomorrow |
+| `U` | Toggle read / unread |
+| `L` or `H` | Add or remove Reply Later |
+| `A` | Add or remove Set Aside |
+| `Z` | Bubble up tomorrow, or cancel an active Bubble Up |
 | `T` or `#` | Move to Trash |
 | `↑` / `↓` | Scroll an open conversation |
 | `Space` / `Shift+Space`, `PageDown` / `PageUp` | Page through an open conversation |
@@ -241,7 +241,7 @@ For a desktop launcher, download `HEY-Agent-VERSION-linux-x86_64.tar.gz` instead
 ### Requirements
 
 - Linux x86-64 (tested on Omarchy).
-- A HEY account and [HEY CLI](https://github.com/basecamp/hey-cli), installed and signed in.
+- A HEY account and [HEY CLI](https://github.com/basecamp/hey-cli) 1.4.3 or newer, installed and signed in (`hey upgrade` to update).
 - [Pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent), connected to a model.
 - The HEY skill installed for Pi.
 - FUSE 2 for running AppImages.

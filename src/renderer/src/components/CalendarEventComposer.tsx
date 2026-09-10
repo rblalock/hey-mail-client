@@ -11,6 +11,7 @@ type Props = {
   calendars: CalendarSummary[];
   startsOn: string;
   event?: CalendarEvent;
+  initial?: CalendarEventCreateRequest;
   onClose: () => void;
   onSaved: (message: string) => void;
 };
@@ -70,7 +71,7 @@ function editableInvites(event: CalendarEvent): string {
   return event.attendees.flatMap((person) => person.email && !excluded.has(person.email.toLocaleLowerCase()) ? [person.email] : []).join(", ");
 }
 
-export default function CalendarEventComposer({ calendars, startsOn, event, onClose, onSaved }: Props) {
+export default function CalendarEventComposer({ calendars, startsOn, event, initial, onClose, onSaved }: Props) {
   const dialogRef = useRef<HTMLElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const inviteErrorId = useId();
@@ -84,16 +85,16 @@ export default function CalendarEventComposer({ calendars, startsOn, event, onCl
   const originalInvites = event ? editableInvites(event) : "";
   const originalReminders = event ? reminderToken(event) : "10m";
   const originalRepeat: RepeatChoice = event?.recurring ? "current" : "";
-  const [title, setTitle] = useState(event?.title ?? "");
+  const [title, setTitle] = useState(event?.title ?? initial?.title ?? "");
   const [calendarId, setCalendarId] = useState(event?.calendar.id ?? writableCalendars[0]?.id ?? "");
-  const [startDate, setStartDate] = useState(start.date);
-  const [endDate, setEndDate] = useState(end.date);
-  const [allDay, setAllDay] = useState(event?.allDay ?? true);
-  const [startTime, setStartTime] = useState(start.time);
-  const [endTime, setEndTime] = useState(end.time);
-  const [location, setLocation] = useState(event?.location ?? "");
-  const [link, setLink] = useState(event?.linkUrl ?? "");
-  const [notes, setNotes] = useState(event?.description ?? "");
+  const [startDate, setStartDate] = useState(initial?.startsOn ?? start.date);
+  const [endDate, setEndDate] = useState(initial?.endsOn ?? end.date);
+  const [allDay, setAllDay] = useState(event?.allDay ?? initial?.allDay ?? true);
+  const [startTime, setStartTime] = useState(initial?.startTime ?? start.time);
+  const [endTime, setEndTime] = useState(initial?.endTime ?? end.time);
+  const [location, setLocation] = useState(event?.location ?? initial?.location ?? "");
+  const [link, setLink] = useState(event?.linkUrl ?? initial?.link ?? "");
+  const [notes, setNotes] = useState(event?.description ?? initial?.notes ?? "");
   const [invites, setInvites] = useState(originalInvites);
   const [contacts, setContacts] = useState<MailLibraryItem[]>([]);
   const [reminders, setReminders] = useState(originalReminders);
@@ -106,7 +107,7 @@ export default function CalendarEventComposer({ calendars, startsOn, event, onCl
   const [reviewing, setReviewing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
-  const timeZone = event?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const timeZone = event?.timeZone ?? initial?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const request = useMemo<CalendarEventCreateRequest>(() => ({
     title: title.trim(), calendarId, startsOn: startDate,
     ...(endDate && endDate !== startDate ? { endsOn: endDate } : {}), allDay,
@@ -177,7 +178,7 @@ export default function CalendarEventComposer({ calendars, startsOn, event, onCl
     } finally { setSubmitting(false); }
   };
 
-  const titleText = editing ? "Edit event" : "New event";
+  const titleText = editing ? "Edit event" : initial ? "Add personal copy" : "New event";
   return createPortal(<div className="dialog-scrim calendar-composer-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) onClose(); }}>
     <section ref={dialogRef} className="calendar-composer" role="dialog" aria-modal="true" aria-label={reviewing ? "Review event invitations" : titleText} onKeyDown={(event) => {
       event.stopPropagation();
@@ -196,6 +197,7 @@ export default function CalendarEventComposer({ calendars, startsOn, event, onCl
         <p className="calendar-invite-warning"><strong>Creating this event sends invitations.</strong> Review the exact details before HEY notifies these guests.</p>
         <dl><div><dt>Event</dt><dd>{request.title}</dd></div><div><dt>Calendar</dt><dd>{selectedCalendar?.name}</dd></div><div><dt>When</dt><dd>{describeWhen(request)}</dd></div>{request.invites?.length ? <div><dt>Invited</dt><dd>{request.invites.join(", ")}</dd></div> : null}{request.reminders?.length ? <div><dt>Reminders</dt><dd>{request.reminders.join(", ")} before</dd></div> : null}{request.repeat ? <div><dt>Repeats</dt><dd>{repeatOptions.find((option) => option.value === request.repeat)?.label}</dd></div> : null}{request.repeatUntil ? <div><dt>Repeat until</dt><dd>{request.repeatUntil}</dd></div> : null}</dl>
       </div> : <div className="calendar-composer-body">
+        {initial && <p className="calendar-invite-warning">This creates a separate calendar entry. Respond to the original invitation in HEY.</p>}
         {writableCalendars.length === 0 || editing && !event?.calendar.writable ? <div className="calendar-composer-unavailable"><strong>This event is read-only</strong><p>Subscribed and external calendars must be edited in their source calendar.</p></div> : <>
           <label className="calendar-field calendar-title-field"><span>Event name</span><input ref={titleRef} autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="What’s happening?" /></label>
           <div className="calendar-form-row">{editing ? <div className="calendar-field calendar-fixed-field"><span>Calendar</span><strong>{selectedCalendar?.name}</strong></div> : <label className="calendar-field"><span>Calendar</span><select value={calendarId} onChange={(event) => setCalendarId(event.target.value)}>{writableCalendars.map((calendar) => <option key={calendar.id} value={calendar.id}>{calendar.name}{calendar.ownerEmailAddress ? ` · ${calendar.ownerEmailAddress}` : ""}</option>)}</select></label>}<label className="calendar-check"><input type="checkbox" checked={circle} onChange={(event) => setCircle(event.target.checked)} /><span>Circle this day</span></label></div>

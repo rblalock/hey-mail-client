@@ -11,12 +11,18 @@ describe("canonical HEY mail identity", () => {
     expect(sender).toEqual({ name: "Taylor Example", email: "relay@example.com", kind: "Service" });
   });
 
-  it("uses the external contact when HEY identifies the account owner as creator", () => {
+  it("preserves the actual User author instead of substituting a recipient", () => {
     const sender = resolveMailSender({
       creator: { name: "Account Owner", email_address: "owner@example.com", contactable_type: "User" },
     }, { fallback: { name: "External Sender", email: "external@example.com", kind: "Person" } });
 
-    expect(sender).toEqual({ name: "External Sender", email: "external@example.com", kind: "Person" });
+    expect(sender).toEqual({ name: "Account Owner", email: "owner@example.com", kind: "User" });
+  });
+
+  it("retains the external fallback when HEY explicitly names a different actor", () => {
+    expect(resolveMailSender({ creator: { name: "Account Owner", contactable_type: "User" }, alternative_sender_name: "Build Bot" }, {
+      fallback: { name: "Relay", email: "relay@example.test" },
+    })).toEqual({ name: "Build Bot", email: "relay@example.test" });
   });
 
   it("falls back to known notification and invitation grammars only when HEY has no explicit actor", () => {

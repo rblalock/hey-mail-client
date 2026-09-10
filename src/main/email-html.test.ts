@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { normalizeHeyHtmlFragment, parseThreadHtmlDocument } from "./email-html";
 
 describe("HEY HTML email parsing", () => {
+  it("keeps PDF attachment names visible without treating files as remote images", () => {
+    const content = '<p>Please review.</p><action-text-attachment content-type="application/pdf" url="https://files.example/review.pdf" filename="review.pdf"></action-text-attachment>';
+    const trix = JSON.stringify({ contentType: "text/html", content }).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42"><figure data-trix-attachment="${trix}"></figure></article>`).get("42");
+    expect(entry?.html).toContain("Attachment: review.pdf");
+    expect(entry?.html).not.toContain("<img");
+    expect(entry?.html).not.toContain("files.example");
+    expect(entry?.hasRemoteContent).toBe(false);
+  });
+  it("preserves standalone Trix files, including attachment-only messages", () => {
+    const trix = JSON.stringify({ contentType: "application/pdf", filename: "report.pdf", url: "https://files.example/report.pdf" }).replace(/"/g, "&quot;");
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42"><figure data-trix-attachment="${trix}"></figure></article>`).get("42");
+    expect(entry?.html).toContain("Attachment: report.pdf");
+    expect(entry?.html).not.toContain("<img");
+  });
   it("normalizes HEY's From label as metadata instead of part of the sender name", () => {
     const entry = parseThreadHtmlDocument(`<article data-entry-id="42"><header>From: Taylor Example — 2026-08-30T14:30Z</header><p>Hello.</p></article>`).get("42");
     expect(entry).toMatchObject({ senderName: "Taylor Example", occurredAt: "2026-08-30T14:30Z" });

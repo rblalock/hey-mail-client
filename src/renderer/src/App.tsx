@@ -25,6 +25,7 @@ import ThreadListingView from "./components/ThreadListingView";
 import RailMorphButton from "./components/RailMorphButton";
 import { MailThreadCache } from "./mail-thread-cache";
 import { bulkMutationRequest, isBulkMutationCommand, prioritizeBulkCommands } from "./bulk-actions";
+import { mailToggle } from "./mail-toggles";
 import { extendMailboxSelection, groupImboxPostings, moveMailboxCursor, postingAtCursor, type MailSelectionRange } from "./mailbox-navigation";
 import { applyOptimisticMailMutation, nextPostingInSequence, type MailboxCache } from "./optimistic-mail";
 import { readThreadUntilAdvanced } from "./thread-reconciliation";
@@ -432,7 +433,7 @@ export default function App() {
     if (advancesReader) {
       if (nextPosting) selectPosting(nextPosting, false);
       else setSelected(undefined);
-    } else if (["move", "bubble", "unseen", "trash", "spam"].includes(request.operation)) setSelected(undefined);
+    } else if (["move", "bubble", "bubble-pop", "unseen", "trash", "spam"].includes(request.operation)) setSelected(undefined);
     try {
       const result = await window.heyAgent.mail.mutate(request);
       appSound.play(request.operation === "trash" ? "delete" : request.operation === "spam" ? "warning" : "success", "mail");
@@ -449,7 +450,7 @@ export default function App() {
 
   const runBulkCommand = useCallback(async (id: ShortcutId) => {
     if (!activeMailbox || bulkSelectedIds.length === 0 || bulkMutating) return;
-    const request = bulkMutationRequest(id, bulkSelectedIds, activeMailbox);
+    const request = bulkMutationRequest(id, bulkSelectedIds, activeMailbox, mailbox?.postings);
     if (!request) return;
     setBulkMutating(true);
     try {
@@ -462,7 +463,7 @@ export default function App() {
     } finally {
       setBulkMutating(false);
     }
-  }, [activeMailbox, bulkMutating, bulkSelectedIds, mutate]);
+  }, [activeMailbox, bulkMutating, bulkSelectedIds, mailbox, mutate]);
 
   const openReadTogether = useCallback(() => {
     if (!activeMailbox || !mailbox || bulkSelectedIds.length === 0) return;
@@ -909,10 +910,9 @@ export default function App() {
     }
     if (id === "forward") { appSound.play("forward", "interface"); setComposer({ mode: "forward", posting: target }); return; }
     if (id === "seen") { if (!selected) setImboxSection("previous"); void mutate({ operation: "seen", postingIds: [target.id] }); }
-    if (id === "later") void mutate({ operation: "move", postingIds: [target.id], destination: "laterbox", sourceBox: activeMailbox });
-    if (id === "aside") void mutate({ operation: "move", postingIds: [target.id], destination: "asidebox", sourceBox: activeMailbox });
-    if (id === "bubble") void mutate({ operation: "bubble", postingIds: [target.id], bubbleSchedule: "tomorrow", sourceBox: activeMailbox });
-    if (id === "unread") void mutate({ operation: "unseen", postingIds: [target.id] });
+    const toggle = mailToggle(id, [target.id], activeMailbox, [target]);
+    if (toggle) void mutate(toggle.request);
+    if (id === "stop-ignoring") void mutate({ operation: "stop-ignoring", postingIds: [target.id] });
     if (id === "trash") void mutate({ operation: "trash", postingIds: [target.id], sourceBox: activeMailbox });
   }, [activeMailbox, agentRailOpen, agentWorkspace, bulkSelectedIds, closeReader, highlightedId, launchHelper, mailbox, moveCursor, moveThreadSelection, mutate, navigate, navigation.overlay, openBulkOrganizer, openReadTogether, readTogether, readerOrigin, runAgentContextCommand, runBulkCommand, selectPosting, selected, toggleBulkSelection, toggleNavigation]);
 
@@ -927,8 +927,15 @@ export default function App() {
       ? applicable.filter((command) => !isBulkMutationCommand(command.id) || Boolean(bulkMutationRequest(command.id, bulkSelectedIds, activeMailbox)))
       : applicable;
     const helperCommands: ShortcutDefinition[] = contextualHelpers.map((helper) => ({ id: helperCommandId(helper.id), label: helperCommandLabel(helper, agentContextAttachments.length), keys: [], display: "", scope: "agent-context" as const }));
-    return [...helperCommands, ...contextCommands, ...prioritizeBulkCommands(validForMailbox, bulkSelectedIds.length)];
-  }, [activeMailbox, actionPosting, agentContextAttachments.length, agentWorkspace, bulkSelectedIds, contextCommands, contextualHelpers, readTogether, selected, shortcuts]);
+    const contextualCommands = prioritizeBulkCommands(validForMailbox, bulkSelectedIds.length).map((command) => {
+      if (!activeMailbox) return command;
+      const ids = bulkSelectedIds.length ? bulkSelectedIds : actionPosting ? [actionPosting.id] : [];
+      const toggle = mailToggle(command.id, ids, activeMailbox, bulkSelectedIds.length ? mailbox?.postings : actionPosting ? [actionPosting] : []);
+      const label = command.id === "aside" ? (toggle?.active ? "Set Aside: remove" : "Set Aside") : toggle?.label;
+      return toggle ? { ...command, label: `${label}${bulkSelectedIds.length ? ` · ${bulkSelectedIds.length} selected` : ""}` } : command;
+    });
+    return [...helperCommands, ...contextCommands, ...contextualCommands];
+  }, [activeMailbox, actionPosting, agentContextAttachments.length, agentWorkspace, bulkSelectedIds, contextCommands, contextualHelpers, mailbox, readTogether, selected, shortcuts]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

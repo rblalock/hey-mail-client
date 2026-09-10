@@ -1,20 +1,20 @@
-import type { MailMutationRequest, MailboxKey } from "../../shared/contracts";
+import type { ImboxPosting, MailMutationRequest, MailboxKey } from "../../shared/contracts";
+import { mailToggle } from "./mail-toggles";
 import type { ShortcutDefinition, ShortcutId } from "./shortcuts";
 
-const REUSED_BULK_COMMANDS = new Set<ShortcutId>(["later", "aside", "bubble", "seen", "unread", "trash"]);
+const REUSED_BULK_COMMANDS = new Set<ShortcutId>(["later", "aside", "bubble", "seen", "unread", "trash", "stop-ignoring"]);
 const BULK_ONLY_COMMANDS = new Set<ShortcutId>(["bulk-imbox", "bulk-feed", "bulk-trail", "bulk-ignore"]);
 
 export function isBulkMutationCommand(id: ShortcutId): boolean {
   return REUSED_BULK_COMMANDS.has(id) || BULK_ONLY_COMMANDS.has(id);
 }
 
-export function bulkMutationRequest(id: ShortcutId, postingIds: string[], sourceBox: MailboxKey): MailMutationRequest | undefined {
+export function bulkMutationRequest(id: ShortcutId, postingIds: string[], sourceBox: MailboxKey, postings: ImboxPosting[] = []): MailMutationRequest | undefined {
   if (postingIds.length === 0) return undefined;
-  if (id === "later" && sourceBox !== "laterbox") return { operation: "move", postingIds, destination: "laterbox", sourceBox };
-  if (id === "aside" && sourceBox !== "asidebox") return { operation: "move", postingIds, destination: "asidebox", sourceBox };
-  if (id === "bubble") return { operation: "bubble", postingIds, bubbleSchedule: "tomorrow", sourceBox };
+  const toggle = mailToggle(id, postingIds, sourceBox, postings);
+  if (toggle) return toggle.request;
   if (id === "seen") return { operation: "seen", postingIds };
-  if (id === "unread") return { operation: "unseen", postingIds };
+  if (id === "stop-ignoring") return { operation: "stop-ignoring", postingIds };
   if (id === "trash") return { operation: "trash", postingIds, sourceBox };
   if (id === "bulk-imbox" && sourceBox !== "imbox") return { operation: "move", postingIds, destination: "imbox", sourceBox };
   if (id === "bulk-feed" && sourceBox !== "feedbox") return { operation: "move", postingIds, destination: "feedbox", sourceBox };
@@ -46,6 +46,7 @@ export function countAwareBulkCommand(command: ShortcutDefinition, count: number
     "bulk-feed": `Move ${selection} to The Feed`,
     "bulk-trail": `Move ${selection} to Paper Trail`,
     "bulk-ignore": `Ignore ${selection}`,
+    "stop-ignoring": `Stop ignoring ${selection}`,
   };
   return labels[command.id] ? { ...command, label: labels[command.id]! } : command;
 }

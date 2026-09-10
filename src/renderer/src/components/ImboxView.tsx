@@ -1,11 +1,16 @@
 import { ArrowUpCircle, BellOff, Check, Circle, Clock3, Eye, EyeOff, FileClock, FolderKanban, FolderPlus, Inbox, Layers3, MoreHorizontal, Newspaper, RefreshCw, Reply, Rows3, Search, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Ungroup } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Bell } from "lucide-react";
 import type { ImboxPosting, ImboxResult, MailboxKey, MailOrganizationKind, MailOverview, SetAsideGroupMutationRequest } from "../../../shared/contracts";
 import type { ShortcutId } from "../shortcuts";
 import { appSound } from "../sound";
 import { groupImboxPostings } from "../mailbox-navigation";
+import { mailDayHeaders } from "../mail-days";
+import { mailToggle } from "../mail-toggles";
 import { paperTrailVisitBoundary, usePaperTrailVisit } from "../mailbox-visits";
 import ContactAvatar from "./ContactAvatar";
+import { enrichContactAvatar } from "../contact-avatar";
+import { addressedContacts, contactDetails, contactLabel, currentMailEmail, isOwnMail } from "../mail-presentation";
 import { useShortcutHints } from "../shortcut-context";
 
 type ImboxViewProps = {
@@ -36,12 +41,12 @@ type ImboxViewProps = {
   showSenderAvatars?: boolean;
 };
 
-function formatDate(value: string): string {
+function formatDate(value: string, dayGrouped = false): string {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   const now = new Date();
-  if (date.toDateString() === now.toDateString()) return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
+  if (dayGrouped || date.toDateString() === now.toDateString()) return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
@@ -51,9 +56,13 @@ export function mailboxEmptyCopy(boxName: string, imbox: boolean, filtered: bool
   return { title: `${boxName} is empty`, detail: `There are no conversations in ${boxName}.` };
 }
 
-function MailRow({ posting, selectedId, bulkSelected, imbox, showSenderAvatars, onSelect, onHighlight, onToggleSelection }: { posting: ImboxPosting; selectedId?: string; bulkSelected: boolean; imbox: boolean; showSenderAvatars: boolean; onSelect: (posting: ImboxPosting) => void; onHighlight: (id: string) => void; onToggleSelection: (posting: ImboxPosting) => void }) {
+function MailRow({ posting, selectedId, bulkSelected, imbox, dayGrouped, showSenderAvatars, onSelect, onHighlight, onToggleSelection }: { posting: ImboxPosting; selectedId?: string; bulkSelected: boolean; imbox: boolean; dayGrouped: boolean; showSenderAvatars: boolean; onSelect: (posting: ImboxPosting) => void; onHighlight: (id: string) => void; onToggleSelection: (posting: ImboxPosting) => void }) {
   const selectHint = useShortcutHints()("select");
-  const sender = posting.sender.name;
+  const selfEmail = currentMailEmail();
+  const own = isOwnMail(posting.sender, selfEmail);
+  const recipients = own ? addressedContacts(posting) : [];
+  const sender = contactLabel(posting.sender, selfEmail);
+  const senderTitle = [contactDetails(posting.sender), recipients.length ? `Recipients: ${recipients.map(contactDetails).join(", ")}` : ""].filter(Boolean).join("\n");
   const selected = posting.id === selectedId;
   const bubbledUp = imbox && posting.bubbledUp === true;
   const clickRow = (event: MouseEvent<HTMLButtonElement>) => {
@@ -67,14 +76,17 @@ function MailRow({ posting, selectedId, bulkSelected, imbox, showSenderAvatars, 
       {!bulkSelected && (bubbledUp ? <span className="bubbled-up-mark" title="Bubbled Up"><ArrowUpCircle size={16} aria-label="Bubbled Up" /></span> : !posting.seen && <span className="unseen-dot" title="Unseen" />)}
     </span>
     <span className="sender-cell">
-      {showSenderAvatars && <ContactAvatar className="sender-avatar" contact={posting.sender} />}
-      <span className="sender-copy"><strong title={sender}>{sender}</strong></span>
+      {showSenderAvatars && <ContactAvatar className="sender-avatar" contact={enrichContactAvatar(posting.sender, posting.contacts)} />}
+      <span className="sender-copy" title={senderTitle}>
+        <strong>{sender}{recipients[0] ? ` → ${contactLabel(recipients[0], selfEmail)}` : ""}</strong>
+        {recipients.length > 1 && <span className="recipient-count">+{recipients.length - 1}</span>}
+      </span>
     </span>
     <span className="conversation-cell">
-      <span className="subject-line"><strong title={posting.subject}>{posting.subject}</strong>{posting.kind === "bundle" && <Layers3 size={12} aria-label="Contact bundle" />}{posting.visibleEntryCount > 1 && <span className="entry-count">{posting.visibleEntryCount}</span>}</span>
+      <span className="subject-line"><strong title={posting.subject}>{posting.subject}</strong>{posting.kind === "bundle" && <Layers3 size={12} aria-label="Contact bundle" />}{posting.visibleEntryCount > 1 && <span className="entry-count" title={`${posting.visibleEntryCount} ${posting.kind === "bundle" ? "items" : "messages"}`} aria-label={`${posting.visibleEntryCount} ${posting.kind === "bundle" ? "items" : "messages"}`}>({posting.visibleEntryCount})</span>}</span>
       {posting.summary && <span className="summary-line">— {posting.summary}</span>}
     </span>
-    <span className="updated-cell"><time dateTime={posting.createdAt}>{formatDate(posting.createdAt)}</time></span>
+    <span className="updated-cell"><time dateTime={posting.createdAt} title={posting.createdAt && Number.isFinite(Date.parse(posting.createdAt)) ? new Date(posting.createdAt).toLocaleString() : undefined}>{formatDate(posting.createdAt, dayGrouped)}</time></span>
   </button>;
 }
 
@@ -92,6 +104,8 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
     return (result?.postings ?? []).filter((posting) => [posting.subject, posting.summary, ...posting.contacts.flatMap((contact) => [contact.name, contact.email ?? ""])].some((value) => value.toLowerCase().includes(normalized)));
   }, [query, result]);
   const sections = groupImboxPostings(postings);
+  const dayGrouped = mailboxKey === "feedbox" || mailboxKey === "trailbox";
+  const dayHeaders = dayGrouped ? mailDayHeaders(postings) : new Map<string, string>();
   const showSections = isImbox && result?.status === "ready" && !query.trim() && postings.length > 0;
   const isSetAside = result?.boxKey === "asidebox" && !query;
   const trailVisit = usePaperTrailVisit(mailboxKey, result, hidden, loading);
@@ -147,8 +161,12 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   }, [hidden, setAsideGroupTarget, postings]);
 
   const bulkSelection = useMemo(() => new Set(bulkSelectedIds), [bulkSelectedIds]);
-  const renderRows = (rows: ImboxPosting[]) => rows.map((posting) => <MailRow showSenderAvatars={showSenderAvatars} key={posting.id} posting={posting} selectedId={selectedId} bulkSelected={bulkSelection.has(posting.id)} imbox={isImbox} onSelect={onSelect} onHighlight={onHighlight} onToggleSelection={onToggleSelection} />);
+  const renderRows = (rows: ImboxPosting[]) => rows.map((posting) => <Fragment key={posting.id}>
+    {dayHeaders.has(posting.id) && <div className="mail-day-heading" role="separator" aria-label={dayHeaders.get(posting.id)}><span>{dayHeaders.get(posting.id)}</span></div>}
+    <MailRow showSenderAvatars={showSenderAvatars} posting={posting} selectedId={selectedId} bulkSelected={bulkSelection.has(posting.id)} imbox={isImbox} dayGrouped={dayGrouped} onSelect={onSelect} onHighlight={onHighlight} onToggleSelection={onToggleSelection} />
+  </Fragment>);
   const selectedPostings = postings.filter((posting) => bulkSelection.has(posting.id));
+  const selectionToggle = (id: ShortcutId) => mailToggle(id, bulkSelectedIds, mailboxKey, selectedPostings);
   const selectedGrouped = selectedPostings.some((posting) => Boolean(posting.boxGroupId));
   const renderSetAsideRows = () => <div className="set-aside-groups">
     {setAsideGroups.groups.map(([groupId, rows], index) => <section key={groupId} className="set-aside-group" data-set-aside-group={groupId} data-targeted={setAsideGroupTarget === groupId || undefined}>
@@ -217,13 +235,14 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
           <button data-tooltip="Label selection" data-shortcut-id="bulk-label" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onOrganizeSelection("labels"); }}><Tag size={14} /><span>Label</span>{hint("bulk-label") && <kbd>{hint("bulk-label")}</kbd>}</button>
           <button data-tooltip="Add selection to collection" data-shortcut-id="bulk-collection" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onOrganizeSelection("collections"); }}><FolderKanban size={14} /><span>Collection</span>{hint("bulk-collection") && <kbd>{hint("bulk-collection")}</kbd>}</button>
           <span className="bulk-menu-separator" role="separator" />
-          <button data-tooltip="Move selection to Reply Later" data-shortcut-id="later" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("later"); }} disabled={result?.boxKey === "laterbox"}><Clock3 size={14} /><span>Reply Later</span>{hint("later") && <kbd>{hint("later")}</kbd>}</button>
-          <button data-tooltip="Set selection aside" data-shortcut-id="aside" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("aside"); }} disabled={result?.boxKey === "asidebox"}><FileClock size={14} /><span>Set Aside</span>{hint("aside") && <kbd>{hint("aside")}</kbd>}</button>
-          <button data-tooltip="Bubble up selection tomorrow" data-shortcut-id="bubble" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("bubble"); }}><ArrowUpCircle size={14} /><span>Bubble up tomorrow</span>{hint("bubble") && <kbd>{hint("bubble")}</kbd>}</button>
+          <button data-tooltip={selectionToggle("later")?.label} data-shortcut-id="later" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("later"); }}><Clock3 size={14} /><span>{selectionToggle("later")?.label}</span>{hint("later") && <kbd>{hint("later")}</kbd>}</button>
+          <button data-tooltip={selectionToggle("aside")?.label} data-shortcut-id="aside" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("aside"); }}><FileClock size={14} /><span>{selectionToggle("aside")?.label}</span>{hint("aside") && <kbd>{hint("aside")}</kbd>}</button>
+          <button data-tooltip={selectionToggle("bubble")?.label} data-shortcut-id="bubble" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("bubble"); }}><ArrowUpCircle size={14} /><span>{selectionToggle("bubble")?.label}</span>{hint("bubble") && <kbd>{hint("bubble")}</kbd>}</button>
           <span className="bulk-menu-separator" role="separator" />
           <button data-tooltip="Mark selection seen" data-shortcut-id="seen" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("seen"); }}><Eye size={14} /><span>Mark seen</span>{hint("seen") && <kbd>{hint("seen")}</kbd>}</button>
-          <button data-tooltip="Mark selection unseen" data-shortcut-id="unread" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("unread"); }}><EyeOff size={14} /><span>Mark unseen</span>{hint("unread") && <kbd>{hint("unread")}</kbd>}</button>
+          <button data-tooltip={selectionToggle("unread")?.label} data-shortcut-id="unread" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("unread"); }}><EyeOff size={14} /><span>{selectionToggle("unread")?.label}</span>{hint("unread") && <kbd>{hint("unread")}</kbd>}</button>
           <button data-tooltip="Ignore selection" data-shortcut-id="bulk-ignore" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("bulk-ignore"); }}><BellOff size={14} /><span>Ignore</span>{hint("bulk-ignore") && <kbd>{hint("bulk-ignore")}</kbd>}</button>
+          <button data-tooltip="Stop ignoring selection" data-shortcut-id="stop-ignoring" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("stop-ignoring"); }}><Bell size={14} /><span>Stop ignoring</span>{hint("stop-ignoring") && <kbd>{hint("stop-ignoring")}</kbd>}</button>
           <span className="bulk-menu-separator" role="separator" />
           <button data-tooltip="Move selection to Imbox" data-shortcut-id="bulk-imbox" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("bulk-imbox"); }} disabled={result?.boxKey === "imbox"}><Inbox size={14} /><span>Imbox</span>{hint("bulk-imbox") && <kbd>{hint("bulk-imbox")}</kbd>}</button>
           <button data-tooltip="Move selection to The Feed" data-shortcut-id="bulk-feed" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("bulk-feed"); }} disabled={result?.boxKey === "feedbox"}><Newspaper size={14} /><span>The Feed</span>{hint("bulk-feed") && <kbd>{hint("bulk-feed")}</kbd>}</button>

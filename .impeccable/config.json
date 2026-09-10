@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "src/main/email-html.ts"
+        ],
+        "createdAt": "2026-09-10T13:39:58.194Z",
+        "reason": "Agent: the Cheerio img template is immediately populated with attachment.url before serialization; existing image parser tests cover the resulting src."
+      }
+    ]
+  }
+}

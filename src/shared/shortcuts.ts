@@ -7,7 +7,7 @@ export type ShortcutId =
   | "toggle-navigation" | "toggle-agent" | "focus-agent" | "select-next" | "select-previous"
   | "composer-write" | "composer-send" | "composer-save" | "composer-cc" | "composer-bcc" | "composer-attach"
   | "select" | "bulk-actions" | "read-together" | "reply-together" | "bulk-label" | "bulk-collection" | "bulk-imbox" | "bulk-feed" | "bulk-trail" | "bulk-ignore"
-  | "reply" | "forward" | "seen" | "later" | "aside" | "bubble" | "unread" | "trash"
+  | "reply" | "forward" | "seen" | "later" | "aside" | "bubble" | "unread" | "trash" | "stop-ignoring"
   | "nav-imbox" | "nav-feed" | "nav-trail" | "nav-later" | "nav-aside" | "nav-bubble"
   | "nav-sessions" | "nav-screener" | "nav-previously" | "nav-calendar" | "nav-settings"
   | "session-new" | "session-close" | "session-next" | "session-previous"
@@ -68,10 +68,11 @@ const CATALOG: ShortcutCatalogEntry[] = [
   { id: "reply", label: "Reply", hey: ["r"], superhuman: ["r"], scope: "conversation" },
   { id: "forward", label: "Forward", hey: ["f"], superhuman: ["f"], scope: "conversation" },
   { id: "seen", label: "Mark seen", hey: ["e"], superhuman: ["e"], scope: "conversation" },
-  { id: "later", label: "Move to Reply Later", hey: ["l", "h"], superhuman: ["h", "l"], scope: "conversation" },
-  { id: "aside", label: "Set aside", hey: ["a"], superhuman: ["a"], scope: "conversation" },
-  { id: "bubble", label: "Bubble up tomorrow", hey: ["z"], superhuman: ["z"], scope: "conversation" },
-  { id: "unread", label: "Mark unseen", hey: ["u"], superhuman: ["u"], scope: "conversation" },
+  { id: "later", label: "Toggle Reply Later", hey: ["l", "h"], superhuman: ["h", "l"], scope: "conversation" },
+  { id: "aside", label: "Set Aside / remove", hey: ["a"], superhuman: ["a"], scope: "conversation" },
+  { id: "bubble", label: "Toggle Bubble Up", hey: ["z"], superhuman: ["z"], scope: "conversation" },
+  { id: "unread", label: "Toggle read / unread", hey: ["u"], superhuman: ["u"], scope: "conversation" },
+  { id: "stop-ignoring", label: "Stop ignoring conversation", hey: [], superhuman: [], scope: "conversation" },
   { id: "trash", label: "Move to Trash", hey: ["t", "#"], superhuman: ["#", "t"], scope: "conversation" },
   { id: "session-new", label: "New session", hey: ["mod+t"], superhuman: ["mod+t"], scope: "session" },
   { id: "session-close", label: "Close session", hey: ["mod+w"], superhuman: ["mod+w"], scope: "session" },

@@ -10,6 +10,9 @@
     "esModuleInterop": true,
     "jsx": "react-jsx",
     "strict": true,
+    // ICAL.js 2.2.1's unused VCardTime declaration conflicts with Time.
+    // Application code remains strictly checked; skip third-party declarations.
+    "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
     "noFallthroughCasesInSwitch": true,
     "noEmit": true,
