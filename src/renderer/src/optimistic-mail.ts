@@ -2,6 +2,12 @@ import type { ImboxPosting, ImboxResult, MailboxKey, MailMutationRequest } from 
 
 export type MailboxCache = Partial<Record<MailboxKey, ImboxResult>>;
 
+// Pending trash is a view mask, not a destructive edit to the cache. Cancelling
+// one action reveals its rows without rolling back unrelated mail changes.
+export function hidePendingTrash(result: ImboxResult | undefined, ids: ReadonlySet<string>): ImboxResult | undefined {
+  return result && ids.size ? { ...result, postings: result.postings.filter((posting) => !ids.has(posting.id)) } : result;
+}
+
 export type OptimisticMailResult = {
   mailboxes: MailboxCache;
   nextCursor?: string;

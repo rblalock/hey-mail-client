@@ -3032,11 +3032,20 @@ kbd {
 .secondary-button { display: inline-flex; height: 29px; align-items: center; gap: 5px; padding: 0 8px; border-radius: 7px; color: var(--ink-2); font-size: 10.5px; }
 .secondary-button:hover { background: var(--hover); color: var(--ink); }
 
-.mail-notice {
+.app-notices {
   position: fixed;
   z-index: 120;
   right: 20px;
   bottom: 20px;
+  width: min(520px, calc(100vw - 40px));
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+.app-notices > * { pointer-events: auto; }
+.mail-notice {
   display: flex;
   min-width: 280px;
   max-width: min(520px, calc(100vw - 40px));
@@ -3049,10 +3058,61 @@ kbd {
   background: var(--surface);
   box-shadow: var(--shadow-raised);
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .mail-notice > span { min-width: 0; flex: 1; }
+.trash-undo-stack {
+  width: min(400px, calc(100vw - 40px));
+  max-height: 50vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trash-undo-stack:empty { display: none; }
+.trash-undo-toast {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px 15px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.trash-undo-toast > span { min-width: 0; overflow-wrap: anywhere; }
+.trash-undo-toast button { min-height: 32px; padding: 4px 8px; flex-shrink: 0; color: var(--accent); border-radius: 6px; }
+.trash-undo-toast button:hover { background: var(--accent-tint); }
+.trash-undo-toast button:disabled { color: var(--ink-2); cursor: default; }
+.trash-undo-toast kbd { margin-left: 6px; font-size: 12px; }
+.trash-undo-countdown { position: absolute; bottom: 0; left: 10px; right: 10px; height: 2px; }
+.trash-undo-countdown span { display: block; height: 100%; background: var(--accent); }
+.confirm-action-dialog {
+  position: fixed;
+  inset: 0;
+  width: min(440px, calc(100vw - 40px));
+  max-height: calc(100dvh - 40px);
+  margin: auto;
+  padding: 24px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--app-font);
+  text-align: left;
+}
+.confirm-action-dialog::backdrop { background: oklch(0 0 0 / .58); }
+.confirm-action-dialog h2 { margin: 0 0 12px; font-size: 21px; font-weight: 650; overflow-wrap: anywhere; }
+.confirm-action-dialog p { margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+.confirm-action-buttons { display: flex; flex-wrap: wrap; align-items: stretch; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.confirm-action-buttons button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; height: auto; max-width: 100%; margin: 0; padding: 8px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.confirm-action-dialog button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .mail-notice > button:not(.icon-button) { height: 27px; padding: 0 8px; border-radius: 6px; background: var(--accent-tint); color: var(--accent); font-weight: 650; }
 
 .app-tooltip {

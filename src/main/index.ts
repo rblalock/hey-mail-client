@@ -31,6 +31,7 @@ import { cleanupMailAttachmentDownloads, downloadMailAttachment, resolveMailAtta
 import { canOpenMailAttachment } from "../shared/mail-attachments";
 import { previewCalendarInvite } from "./mail-calendar-invite";
 import { HeyAccountScope } from "../../resources/hey-account-scope.mjs";
+import { DeferredTrash } from "../shared/deferred-trash";
 import { acknowledgeHeyWrites, pendingHeyWrites } from "../../resources/hey-write-receipts.mjs";
 
 process.env.PATH = desktopRuntimePath();
@@ -63,6 +64,12 @@ let handoffs: AgentHandoffs;
 let accountContext: ReturnType<typeof profileRequest.getStore>;
 let pendingWrites = 0;
 let switchingProfile = false;
+const deferredTrash = new DeferredTrash();
+let finishingTrash = false;
+function trashId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-zA-Z0-9-]{1,64}$/.test(value)) throw new Error("Invalid pending trash action.");
+  return value;
+}
 const themeWatcher = new ThemeWatcher((theme) => mainWindow?.webContents.send("theme:changed", theme));
 let heyWatcher: HeyWatcher | undefined;
 
@@ -228,6 +235,16 @@ function registerIpc(): void {
   handle("mail:mutate", (_event, request) => {
     if (!isMailMutation(request)) throw new Error("Invalid HEY mail action.");
     return mutateMail(request);
+  });
+  handle("mail:queue-trash", (_event, id, request) => {
+    if (!isMailMutation(request) || request.operation !== "trash") throw new Error("Invalid trash action.");
+    const context = profileRequest.getStore()!;
+    return deferredTrash.enqueue(trashId(id), profiles.state.token, () => profileRequest.run(context, () => mutateMail(request)));
+  });
+  handle("mail:cancel-trash", (_event, id) => deferredTrash.cancel(trashId(id), profiles.state.token));
+  handle("mail:pause-trash", (_event, id, paused) => {
+    if (typeof paused !== "boolean") throw new Error("Invalid trash pause state.");
+    return deferredTrash.pause(trashId(id), profiles.state.token, paused);
   });
   handle("mail:send", (_event, request) => {
     if (!isMailSendRequest(request)) throw new Error("Invalid HEY message.");
@@ -621,12 +638,25 @@ function createWindow(): void {
   });
 
   installWindowZoom(mainWindow.webContents);
+  // A paused toast cannot keep a write stuck after its renderer disappears.
+  mainWindow.webContents.on("did-start-navigation", (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) deferredTrash.resumeAll(); });
+  mainWindow.webContents.on("render-process-gone", () => deferredTrash.resumeAll());
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isSafeExternalUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
   mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.on("close", (event) => {
+    if (!deferredTrash.size) return;
+    event.preventDefault();
+    if (finishingTrash) return;
+    finishingTrash = true;
+    void deferredTrash.finishBeforeClose().then((ok) => {
+      finishingTrash = false;
+      if (ok) mainWindow?.close();
+    });
+  });
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -659,7 +689,15 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (deferredTrash.size) {
+    event.preventDefault();
+    if (!finishingTrash) {
+      finishingTrash = true;
+      void deferredTrash.finishBeforeClose().then((ok) => { finishingTrash = false; if (ok) app.quit(); });
+    }
+    return;
+  }
   cleanupMailAttachmentDownloads();
   themeWatcher.stop();
   heyWatcher?.stop();

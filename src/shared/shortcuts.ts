@@ -3,7 +3,7 @@ import { matchesBindingStep, normalizeBindings, isShortcutEvent } from "./shortc
 import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, type HelperId } from "./helpers";
 
 export type ShortcutId =
-  | "commands" | "search" | "compose" | "next" | "previous" | "open" | "back"
+  | "commands" | "search" | "compose" | "next" | "previous" | "open" | "back" | "undo-trash"
   | "toggle-navigation" | "toggle-agent" | "focus-agent" | "select-next" | "select-previous"
   | "composer-write" | "composer-send" | "composer-save" | "composer-cc" | "composer-bcc" | "composer-attach"
   | "select" | "bulk-actions" | "read-together" | "reply-together" | "bulk-label" | "bulk-collection" | "bulk-imbox" | "bulk-feed" | "bulk-trail" | "bulk-ignore"
@@ -33,6 +33,7 @@ const CATALOG: ShortcutCatalogEntry[] = [
   { id: "composer-bcc", label: "Focus Bcc", hey: ["mod+shift+b"], superhuman: ["mod+shift+b"], scope: "composer" },
   { id: "composer-attach", label: "Attach files", hey: ["mod+shift+a"], superhuman: ["mod+shift+a"], scope: "composer" },
   { id: "commands", label: "Open command palette", hey: ["mod+k"], superhuman: ["mod+k"], scope: "global" },
+  { id: "undo-trash", label: "Undo pending trash action", hey: ["mod+z"], superhuman: ["mod+z"], scope: "global" },
   { id: "search", label: "Search all email", hey: ["/"], superhuman: ["/"], scope: "global" },
   { id: "compose", label: "Compose a message", hey: ["w", "c"], superhuman: ["c", "w"], scope: "global" },
   { id: "toggle-navigation", label: "Toggle navigation sidebar", hey: ["mod+b"], superhuman: ["mod+b"], scope: "global" },

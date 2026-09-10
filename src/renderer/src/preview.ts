@@ -1,6 +1,7 @@
 import { DEFAULT_SOUND_SETTINGS, type AgentWorkspace, type AppSettings, type CalendarEvent, type CalendarHabit, type CalendarJournalEntry, type CalendarSummary, type CalendarTimeCategory, type CalendarTimeTrack, type CalendarTodo, type HeyAgentApi, type ImboxPosting, type MailDraft, type ScreenerEntry, type ThemeSnapshot } from "../../shared/contracts";
 import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, helperById, isCustomHelperId, type HelperId } from "../../shared/helpers";
 import { addDays, eventOccursOn } from "./calendar";
+import { DeferredTrash } from "../../shared/deferred-trash";
 import { validateCustomShortcuts } from "../../shared/shortcuts";
 
 const now = Date.now();
@@ -130,6 +131,7 @@ const previewEvents: CalendarEvent[] = [
 ];
 
 export function previewApi(): HeyAgentApi {
+  const trash = new DeferredTrash();
   const accounts = [
     { key: "a".repeat(32), accountId: "101", name: "Alex Morgan", email: "alex@example.com", server: "https://app.hey.com" },
     { key: "b".repeat(32), accountId: "202", name: "Alex at Studio", email: "alex@studio.example", server: "https://app.hey.com" },
@@ -357,6 +359,9 @@ export function previewApi(): HeyAgentApi {
         ],
       }),
       mutate: async (request) => ({ message: "Conversation updated.", undo: request.operation === "seen" ? { operation: "unseen", postingIds: request.postingIds } : undefined }),
+      queueTrash: (id) => trash.enqueue(id, "preview", async () => ({ message: "Moved to Trash." })),
+      cancelTrash: async (id) => trash.cancel(id, "preview"),
+      pauseTrash: async (id, paused) => trash.pause(id, "preview", paused),
       send: async (request) => ({ disposition: request.saveAsDraft ? "draft" : "sent", message: request.saveAsDraft ? "Draft saved in HEY." : "Message sent." }),
       previewBulkReply: async (postingIds) => ({
         postingIds,

@@ -914,6 +914,9 @@ export type HeyAgentApi = {
     previewCalendarInvite(topicId: string, attachmentId: string): Promise<MailCalendarInvite>;
     saveAttachment(topicId: string, attachmentId: string): Promise<{ cancelled: boolean }>;
     mutate(request: MailMutationRequest): Promise<MailMutationResult>;
+    queueTrash(id: string, request: MailMutationRequest): Promise<MailMutationResult | { cancelled: true }>;
+    cancelTrash(id: string): Promise<boolean>;
+    pauseTrash(id: string, paused: boolean): Promise<number | null>;
     send(request: MailSendRequest): Promise<MailSendResult>;
     previewBulkReply(postingIds: string[]): Promise<BulkReplyPreview>;
     sendBulkReply(request: BulkReplySendRequest): Promise<BulkReplySendResult>;

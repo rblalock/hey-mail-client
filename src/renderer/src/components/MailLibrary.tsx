@@ -1,5 +1,6 @@
 import { ExternalLink, FolderKanban, Inbox, MailOpen, MailPlus, Newspaper, ReceiptText, RefreshCw, Search, Sparkles, Tag, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { activateMailRow } from "../mail-row-keyboard";
 import type { AgentObjectLink, ImboxPosting, MailContactDetail, MailLibraryItem, MailLibraryKind, MailLibraryResult, MailThreadListing } from "../../../shared/contracts";
 import ContactAvatar from "./ContactAvatar";
 
@@ -135,7 +136,7 @@ export default function MailLibrary({ hidden = false, onComposeContact, onChatCo
               {contact.updatedAt && <div><dt>Updated</dt><dd>{new Date(contact.updatedAt).toLocaleString()}</dd></div>}
             </dl>
             {contact.status === "approved" && contact.clearanceId && <section className="contact-routing"><h3>Future delivery</h3><p>Choose where HEY should deliver future email from this sender. The CLI cannot currently read back their active destination.</p><div><button type="button" disabled={routing} onClick={() => void routeSender("imbox")}><Inbox size={14} /> Imbox</button><button type="button" disabled={routing} onClick={() => void routeSender("feedbox")}><Newspaper size={14} /> Feed</button><button type="button" disabled={routing} onClick={() => void routeSender("trailbox")}><ReceiptText size={14} /> Paper Trail</button></div></section>}
-            <section className="contact-conversations"><h3>Conversation history</h3>{contactThreadsError ? <p>{contactThreadsError}</p> : contactThreads?.postings.length ? <div>{contactThreads.postings.map((posting) => <button type="button" key={posting.id} data-posting-id={posting.id} onClick={() => onOpenPosting(posting)}><MailOpen size={13} /><span><strong>{posting.subject}</strong><small>{posting.summary || "Open conversation"}</small></span></button>)}</div> : <p>No conversations are available for this contact.</p>}</section>
+            <section className="contact-conversations"><h3>Conversation history</h3>{contactThreadsError ? <p>{contactThreadsError}</p> : contactThreads?.postings.length ? <div>{contactThreads.postings.map((posting) => <button type="button" key={posting.id} data-posting-id={posting.id} onClick={() => onOpenPosting(posting)} onKeyDown={(event) => activateMailRow(event, () => onOpenPosting(posting))}><MailOpen size={13} /><span><strong>{posting.subject}</strong><small>{posting.summary || "Open conversation"}</small></span></button>)}</div> : <p>No conversations are available for this contact.</p>}</section>
             <section className="contact-note"><h3>Private note</h3><p>{contact.note || "No private note for this contact."}</p></section>
           </div>}
         </aside>}

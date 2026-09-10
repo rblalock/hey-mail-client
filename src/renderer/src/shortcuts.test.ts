@@ -6,6 +6,14 @@ function keyboard(key: string, overrides: Partial<KeyboardEvent> = {}): Keyboard
 }
 
 describe("mail shortcut registry", () => {
+  it("registers trash Undo for both command modifiers, but not redo or key repeat", () => {
+    const undo = SHORTCUTS.find((item) => item.id === "undo-trash")!;
+    expect(undo).toMatchObject({ display: "Ctrl+Z", scope: "global" });
+    expect(matchesShortcut(keyboard("z", { ctrlKey: true }), undo)).toBe(true);
+    expect(matchesShortcut(keyboard("z", { metaKey: true }), undo)).toBe(true);
+    expect(matchesShortcut(keyboard("z", { ctrlKey: true, shiftKey: true }), undo)).toBe(false);
+    expect(matchesShortcut(keyboard("z", { ctrlKey: true, repeat: true }), undo)).toBe(false);
+  });
   it("matches platform command, navigation, and triage keys", () => {
     expect(matchesShortcut(keyboard("k", { ctrlKey: true }), SHORTCUTS.find((item) => item.id === "commands")!)).toBe(true);
     expect(matchesShortcut(keyboard("j"), SHORTCUTS.find((item) => item.id === "next")!)).toBe(true);

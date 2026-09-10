@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { confirmAction } from "./ConfirmAction";
 import type { AgentChatLink, AgentWorkspace } from "../../../shared/contracts";
 import { matchingSessions } from "../session-history";
 import { appSound } from "../sound";
@@ -22,7 +23,7 @@ export default function SessionHistory({ workspace, onWorkspace, onOpen }: Props
   const act = async (chat: AgentChatLink, open: boolean) => {
     if (pending.current) return;
     const running = workspace?.tabs.some((tab) => tab.id === chat.id && ["starting", "running"].includes(tab.status));
-    if (!open && !chat.archivedAt && running && !window.confirm("This session is still working. Archive it and stop the current run?")) return;
+    if (!open && !chat.archivedAt && running && !await confirmAction("This session is still working. Archive it and stop the current run?", "Archive session")) return;
     pending.current = true;
     setBusy(chat.id); setError(undefined);
     try {

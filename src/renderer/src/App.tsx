@@ -1,4 +1,7 @@
 import { AlertCircle, Sparkles } from "lucide-react";
+import ConfirmAction, { confirmAction } from "./components/ConfirmAction";
+import TrashUndoToast from "./components/TrashUndoToast";
+import { useTrashQueue } from "./use-trash-queue";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProfileValue } from "./profile-storage";
 import type {
@@ -27,7 +30,7 @@ import { MailThreadCache } from "./mail-thread-cache";
 import { bulkMutationRequest, isBulkMutationCommand, prioritizeBulkCommands } from "./bulk-actions";
 import { mailToggle } from "./mail-toggles";
 import { extendMailboxSelection, groupImboxPostings, moveMailboxCursor, postingAtCursor, type MailSelectionRange } from "./mailbox-navigation";
-import { applyOptimisticMailMutation, nextPostingInSequence, type MailboxCache } from "./optimistic-mail";
+import { applyOptimisticMailMutation, hidePendingTrash, nextPostingInSequence, type MailboxCache } from "./optimistic-mail";
 import { readThreadUntilAdvanced } from "./thread-reconciliation";
 import { postingsForReadTogether, skippedReadTogetherCount } from "./read-together";
 import TooltipLayer from "./components/TooltipLayer";
@@ -147,13 +150,25 @@ export default function App() {
   const handledAgentTools = useRef(new Set<string>());
   const initializedAgentTab = useRef<string | undefined>(undefined);
   const activeMailbox = MAILBOX_ROUTES[active];
+  const trash = useTrashQueue((request) => {
+    const ids = new Set(request.postingIds);
+    // Retire the optimistic mask only after the write; old reads must not restore it.
+    for (const key of MAILBOX_KEYS) requestSequence.current[key] = (requestSequence.current[key] ?? 0) + 1;
+    setLoadingMailboxes({});
+    setMailboxes((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, value && { ...value, postings: value.postings.filter((posting) => !ids.has(posting.id)) }])));
+  }, (message) => {
+    appSound.play("error", "mail");
+    setNotice({ message: `Trash action failed. ${message}` });
+  });
+  const pendingTrashIds = useMemo(() => new Set(trash.items.flatMap((item) => item.request.postingIds)), [trash.items]);
   const mailbox = useMemo(() => {
-    const result = activeMailbox ? mailboxes[activeMailbox] : undefined;
+    const source = activeMailbox ? mailboxes[activeMailbox] : undefined;
+    const result = hidePendingTrash(source, pendingTrashIds);
     if (result?.boxKey !== "imbox") return result;
     const { bubbledUp, newForYou, previouslySeen } = groupImboxPostings(result.postings);
     return { ...result, postings: [...bubbledUp, ...newForYou, ...previouslySeen] };
-  }, [activeMailbox, mailboxes]);
-  const imboxUnread = mailboxes.imbox?.postings.filter((posting) => !posting.seen && !posting.bubbledUp).length ?? 0;
+  }, [activeMailbox, mailboxes, pendingTrashIds]);
+  const imboxUnread = mailboxes.imbox?.postings.filter((posting) => !pendingTrashIds.has(posting.id) && !posting.seen && !posting.bubbledUp).length ?? 0;
   const highlightedId = activeMailbox ? mailboxCursor[activeMailbox] : undefined;
   const loading = activeMailbox ? Boolean(loadingMailboxes[activeMailbox]) : false;
   const consumeAgentDraftSeed = useCallback(() => setAgentDraftSeed(undefined), []);
@@ -418,7 +433,23 @@ export default function App() {
   const mutate = useCallback(async (request: MailMutationRequest): Promise<boolean> => {
     const selectionCount = request.postingIds.length;
     const selection = selectionCount === 1 ? "this conversation" : `${selectionCount} conversations`;
-    if ((request.operation === "trash" || request.operation === "spam") && !window.confirm(request.operation === "spam" ? `Mark ${selection} as spam? This also trains HEY's filters.` : `Move ${selection} to Trash?`)) return false;
+    if (request.operation === "spam" && !await confirmAction(`Mark ${selection} as spam? This also trains HEY's filters.`, "Mark as spam")) return false;
+    if (request.operation === "trash") {
+      const ids = new Set(request.postingIds);
+      const rows = mailbox?.postings ?? [];
+      const index = rows.findIndex((posting) => posting.id === (selected?.id ?? highlightedId));
+      const next = rows.slice(Math.max(0, index + 1)).find((posting) => !ids.has(posting.id))
+        ?? rows.slice(0, Math.max(0, index)).reverse().find((posting) => !ids.has(posting.id));
+      trash.enqueue({ ...request, sourceBox: request.sourceBox ?? activeMailbox });
+      if (activeMailbox && (!highlightedId || ids.has(highlightedId))) setMailboxCursor((current) => ({ ...current, [activeMailbox]: next?.id }));
+      if (selected && ids.has(selected.id)) {
+        if (next) selectPosting(next, false);
+        else setSelected(undefined);
+      }
+      if (!selected || !next) requestAnimationFrame(() => document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-row[data-selected="true"]')?.focus({ preventScroll: true }));
+      appSound.play("delete", "mail");
+      return true;
+    }
     const advancesReader = Boolean(selected && request.postingIds.includes(selected.id) && READER_TRIAGE_OPERATIONS.has(request.operation));
     const nextPosting = advancesReader && selected ? nextPostingInSequence(mailbox?.postings ?? [], selected.id) : undefined;
     const optimistic = applyOptimisticMailMutation(mailboxes, activeMailbox, highlightedId, request);
@@ -436,7 +467,7 @@ export default function App() {
     } else if (["move", "bubble", "bubble-pop", "unseen", "trash", "spam"].includes(request.operation)) setSelected(undefined);
     try {
       const result = await window.heyAgent.mail.mutate(request);
-      appSound.play(request.operation === "trash" ? "delete" : request.operation === "spam" ? "warning" : "success", "mail");
+      appSound.play(request.operation === "spam" ? "warning" : "success", "mail");
       setNotice({ message: result.message, ...(result.undo ? { undo: result.undo } : {}) });
       await refresh();
       return true;
@@ -446,7 +477,7 @@ export default function App() {
       await refresh();
       return false;
     }
-  }, [activeMailbox, highlightedId, mailbox, mailboxes, refresh, selectPosting, selected]);
+  }, [activeMailbox, highlightedId, mailbox, mailboxes, refresh, selectPosting, selected, trash.enqueue]);
 
   const runBulkCommand = useCallback(async (id: ShortcutId) => {
     if (!activeMailbox || bulkSelectedIds.length === 0 || bulkMutating) return;
@@ -790,6 +821,8 @@ export default function App() {
     // Let the source view remount and finish its own initial focus first.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (document.querySelector(".thread-panel")) return;
+      // Explicit navigation after Escape wins over this delayed restoration.
+      if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.imbox-panel:not([hidden]) .mail-row[aria-current="true"]')) return;
       const scope = origin === "search" ? ".mail-search-results" : origin === "library" ? ".contact-conversations" : origin === "bundle" ? ".thread-listing-body" : ".imbox-panel";
       const row = postingId ? document.querySelector<HTMLElement>(`${scope} [data-posting-id="${CSS.escape(postingId)}"]`) : null;
       const fallback = origin === "agent" ? document.querySelector<HTMLElement>(".agent-composer textarea") : document.querySelector<HTMLElement>(`${scope} button`);
@@ -797,6 +830,18 @@ export default function App() {
       if (target?.getClientRects().length) target.focus({ preventScroll: true });
     }));
   }, [readTogether, readerOrigin, selected]);
+
+  const undoTrash = useCallback(async (id?: string) => {
+    const item = id ? trash.items.find((entry) => entry.id === id) : trash.items.at(-1);
+    if (!item || !await trash.undo(item.id)) return false;
+    appSound.play("undo", "mail");
+    if (!selected && activeMailbox && item.request.sourceBox === activeMailbox) {
+      const postingId = item.request.postingIds[0];
+      setMailboxCursor((current) => ({ ...current, [activeMailbox]: postingId }));
+      requestAnimationFrame(() => document.getElementById(`mail-row-${postingId}`)?.focus({ preventScroll: true }));
+    }
+    return true;
+  }, [activeMailbox, selected, trash.items, trash.undo]);
 
   const runCommand = useCallback((id: ShortcutId) => {
     if (id === "commands") {
@@ -810,6 +855,7 @@ export default function App() {
       return;
     }
     setCommandsOpen(false);
+    if (id === "undo-trash") { void undoTrash(); return; }
     const helperId = helperIdFromCommand(id);
     if (helperId) {
       launchHelper(helperId);
@@ -914,15 +960,15 @@ export default function App() {
     if (toggle) void mutate(toggle.request);
     if (id === "stop-ignoring") void mutate({ operation: "stop-ignoring", postingIds: [target.id] });
     if (id === "trash") void mutate({ operation: "trash", postingIds: [target.id], sourceBox: activeMailbox });
-  }, [activeMailbox, agentRailOpen, agentWorkspace, bulkSelectedIds, closeReader, highlightedId, launchHelper, mailbox, moveCursor, moveThreadSelection, mutate, navigate, navigation.overlay, openBulkOrganizer, openReadTogether, readTogether, readerOrigin, runAgentContextCommand, runBulkCommand, selectPosting, selected, toggleBulkSelection, toggleNavigation]);
+  }, [activeMailbox, agentRailOpen, agentWorkspace, bulkSelectedIds, closeReader, highlightedId, launchHelper, mailbox, moveCursor, moveThreadSelection, mutate, navigate, navigation.overlay, openBulkOrganizer, openReadTogether, readTogether, readerOrigin, runAgentContextCommand, runBulkCommand, selectPosting, selected, toggleBulkSelection, toggleNavigation, undoTrash]);
 
   const availableCommands = useMemo(() => {
-    const applicable = shortcuts.filter((command) => command.scope === "global"
+    const applicable = shortcuts.filter((command) => (command.id !== "undo-trash" || trash.items.length > 0) && (command.scope === "global"
       || command.scope === "mailbox" && Boolean(activeMailbox)
       || command.scope === "bulk" && bulkSelectedIds.length > 0 && (command.id !== "reply-together" || bulkSelectedIds.length >= 2)
       || command.scope === "conversation" && Boolean(actionPosting) && (bulkSelectedIds.length === 0 || isBulkMutationCommand(command.id))
       || command.scope === "reader" && Boolean(selected || readTogether)
-      || command.scope === "session" && Boolean(agentWorkspace));
+      || command.scope === "session" && Boolean(agentWorkspace)));
     const validForMailbox = bulkSelectedIds.length > 0 && activeMailbox
       ? applicable.filter((command) => !isBulkMutationCommand(command.id) || Boolean(bulkMutationRequest(command.id, bulkSelectedIds, activeMailbox)))
       : applicable;
@@ -935,7 +981,7 @@ export default function App() {
       return toggle ? { ...command, label: `${label}${bulkSelectedIds.length ? ` · ${bulkSelectedIds.length} selected` : ""}` } : command;
     });
     return [...helperCommands, ...contextCommands, ...contextualCommands];
-  }, [activeMailbox, actionPosting, agentContextAttachments.length, agentWorkspace, bulkSelectedIds, contextCommands, contextualHelpers, mailbox, readTogether, selected, shortcuts]);
+  }, [activeMailbox, actionPosting, agentContextAttachments.length, agentWorkspace, bulkSelectedIds, contextCommands, contextualHelpers, mailbox, readTogether, selected, shortcuts, trash.items.length]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1007,7 +1053,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => { window.removeEventListener("keydown", onKeyDown); if (chord.current) clearTimeout(chord.current.timer); };
-  }, [availableCommands, bulkComposerOpen, bulkSelectedIds.length, closeReader, composer, navigation.overlay, notice?.bulkUndoId, organizer, readTogether, runCommand, undo]);
+  }, [availableCommands, bulkComposerOpen, bulkSelectedIds.length, closeReader, composer, navigation.overlay, notice?.bulkUndoId, organizer, readTogether, runCommand, undo, undoTrash, trash.items.length, selected, mailbox, selectPosting]);
 
   const newChat = () => {
     setAgentError(undefined); setAgentDraftSeed(undefined);
@@ -1043,9 +1089,9 @@ export default function App() {
     setAgentError(undefined); setAgentDraftSeed(undefined);
     void window.heyAgent.agent.openChat(chatId).then((workspace) => { setAgentWorkspace(workspace); setAgentRailOpen(true); }).catch((reason: unknown) => setAgentError(reason instanceof Error ? reason.message : "Unable to open that session."));
   };
-  const archiveChat = (chatId: string, archived: boolean) => {
+  const archiveChat = async (chatId: string, archived: boolean) => {
     const tab = agentWorkspace?.tabs.find((item) => item.id === chatId);
-    if (archived && (tab?.status === "starting" || tab?.status === "running") && !window.confirm("This session is still working. Archive it and stop the current run?")) return;
+    if (archived && (tab?.status === "starting" || tab?.status === "running") && !await confirmAction("This session is still working. Archive it and stop the current run?", "Archive session")) return;
     setAgentError(undefined);
     void window.heyAgent.agent.archiveSession(chatId, archived).then(setAgentWorkspace).catch((reason: unknown) => setAgentError(reason instanceof Error ? reason.message : `Unable to ${archived ? "archive" : "restore"} that session.`));
   };
@@ -1118,7 +1164,7 @@ export default function App() {
 
   const updateSetAsideGroup = useCallback(async (request: SetAsideGroupMutationRequest) => {
     if (setAsideGroupBusy) return;
-    if (request.action === "delete" && !window.confirm("Dissolve this group? HEY will move every conversation in it to Previously Seen.")) return;
+    if (request.action === "delete" && !await confirmAction("HEY will move every conversation in this group to Previously Seen.", "Dissolve group")) return;
     setSetAsideGroupBusy(true);
     try {
       const result = await window.heyAgent.mail.updateSetAsideGroup(request);
@@ -1192,8 +1238,12 @@ export default function App() {
       {organizer && <MailOrganizer postings={organizer.postings} initialKind={organizer.initialKind} onClose={() => setOrganizer(undefined)} onNotice={(message) => setNotice({ message })} />}
       {searchOpen && <MailSearch hidden={readerOrigin === "search"} onOpen={(posting) => { appSound.play("open", "interface"); setSelected(posting); setReaderOrigin("search"); }} onClose={() => { appSound.play("close", "interface"); setSearchOpen(false); if (readerOrigin === "search") { setSelected(undefined); setReaderOrigin(undefined); } }} />}
       {commandsOpen && <CommandPalette commands={availableCommands} onRun={runCommand} onClose={() => { appSound.play("close", "interface"); setCommandsOpen(false); }} />}
-      {notice && <div className="mail-notice" role="status"><span>{notice.message}</span>{(notice.undo || notice.bulkUndoId) && <button type="button" onClick={() => void undo()}>Undo{notice.bulkUndoId ? " (Q)" : ""}</button>}<button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setNotice(undefined)}>×</button></div>}
+      <div className="app-notices">
+        <div className="trash-undo-stack" aria-label="Pending trash actions">{[...trash.items].reverse().map((item) => <TrashUndoToast key={item.id} item={item} undo={undoTrash} pause={trash.pause} />)}</div>
+        {notice && <div className="mail-notice" role="status"><span>{notice.message}</span>{(notice.undo || notice.bulkUndoId) && <button type="button" onClick={() => void undo()}>Undo{notice.bulkUndoId ? " (Q)" : ""}</button>}<button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setNotice(undefined)}>×</button></div>}
+      </div>
       {chordHint && <div className="shortcut-chord-hint" role="status"><kbd>{chordHint}</kbd><span>waiting for next key</span></div>}
+      <ConfirmAction />
       <TooltipLayer />
     </main>
     </ShortcutContext>

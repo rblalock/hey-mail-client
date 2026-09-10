@@ -1,5 +1,6 @@
 import { ArrowUpCircle, BellOff, Check, Circle, Clock3, Eye, EyeOff, FileClock, FolderKanban, FolderPlus, Inbox, Layers3, MoreHorizontal, Newspaper, RefreshCw, Reply, Rows3, Search, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Ungroup } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Fragment, useContext, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { activateMailRow } from "../mail-row-keyboard";
 import { Bell } from "lucide-react";
 import type { ImboxPosting, ImboxResult, MailboxKey, MailOrganizationKind, MailOverview, SetAsideGroupMutationRequest } from "../../../shared/contracts";
 import type { ShortcutId } from "../shortcuts";
@@ -11,7 +12,7 @@ import { paperTrailVisitBoundary, usePaperTrailVisit } from "../mailbox-visits";
 import ContactAvatar from "./ContactAvatar";
 import { enrichContactAvatar } from "../contact-avatar";
 import { addressedContacts, contactDetails, contactLabel, currentMailEmail, isOwnMail } from "../mail-presentation";
-import { useShortcutHints } from "../shortcut-context";
+import { ShortcutContext, useShortcutHints } from "../shortcut-context";
 
 type ImboxViewProps = {
   mailboxKey: MailboxKey;
@@ -58,6 +59,7 @@ export function mailboxEmptyCopy(boxName: string, imbox: boolean, filtered: bool
 
 function MailRow({ posting, selectedId, bulkSelected, imbox, dayGrouped, showSenderAvatars, onSelect, onHighlight, onToggleSelection }: { posting: ImboxPosting; selectedId?: string; bulkSelected: boolean; imbox: boolean; dayGrouped: boolean; showSenderAvatars: boolean; onSelect: (posting: ImboxPosting) => void; onHighlight: (id: string) => void; onToggleSelection: (posting: ImboxPosting) => void }) {
   const selectHint = useShortcutHints()("select");
+  const openBindings = useContext(ShortcutContext).find((shortcut) => shortcut.id === "open")?.keys;
   const selfEmail = currentMailEmail();
   const own = isOwnMail(posting.sender, selfEmail);
   const recipients = own ? addressedContacts(posting) : [];
@@ -70,7 +72,7 @@ function MailRow({ posting, selectedId, bulkSelected, imbox, dayGrouped, showSen
     else onSelect(posting);
   };
   const previewHover = () => appSound.play("hover", "interface", { cooldownMs: 70, retrigger: "restart" });
-  return <button id={`mail-row-${posting.id}`} type="button" role="option" aria-current={selected || undefined} aria-selected={bulkSelected} aria-keyshortcuts={selectHint && !selectHint.includes(" then ") ? selectHint : undefined} className="mail-row" data-posting-id={posting.id} data-selected={selected} data-bulk-selected={bulkSelected} data-unseen={!posting.seen && !bubbledUp} onFocus={() => onHighlight(posting.id)} onPointerEnter={previewHover} onClick={clickRow}>
+  return <button id={`mail-row-${posting.id}`} type="button" role="option" aria-current={selected || undefined} aria-selected={bulkSelected} aria-keyshortcuts={selectHint && !selectHint.includes(" then ") ? selectHint : undefined} className="mail-row" data-posting-id={posting.id} data-selected={selected} data-bulk-selected={bulkSelected} data-unseen={!posting.seen && !bubbledUp} onFocus={() => onHighlight(posting.id)} onPointerEnter={previewHover} onClick={clickRow} onKeyDown={(event) => activateMailRow(event, () => onSelect(posting), openBindings)}>
     <span className="mail-state-cell" data-bulk-toggle data-tooltip={bulkSelected ? "Remove from selection" : "Select conversation"} data-shortcut-id="select">
       <span className="mail-selection-mark" data-checked={bulkSelected}>{bulkSelected && <Check size={12} />}</span>
       {!bulkSelected && (bubbledUp ? <span className="bubbled-up-mark" title="Bubbled Up"><ArrowUpCircle size={16} aria-label="Bubbled Up" /></span> : !posting.seen && <span className="unseen-dot" title="Unseen" />)}

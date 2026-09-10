@@ -94,6 +94,7 @@ HEY-like defaults on Linux. Single-letter shortcuts work outside text fields. Th
 | `A` | Add or remove Set Aside |
 | `Z` | Bubble up tomorrow, or cancel an active Bubble Up |
 | `T` or `#` | Move to Trash |
+| `Ctrl+Z` | Cancel the latest pending trash action (five-second window; text fields keep normal Undo) |
 | `↑` / `↓` | Scroll an open conversation |
 | `Space` / `Shift+Space`, `PageDown` / `PageUp` | Page through an open conversation |
 | `Home` / `End` | Top / bottom of an open conversation |

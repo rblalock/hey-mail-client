@@ -8,11 +8,14 @@ export async function checkListNavigation({ window, url, evaluate, until, click,
     await evaluate("window.requestAnimationFrame=callback=>setTimeout(()=>callback(performance.now()),0);window.cancelAnimationFrame=clearTimeout;true");
   };
   const focus = async (selector) => evaluate(`(() => { const node=document.querySelector(${JSON.stringify(selector)}); node.focus(); node.dispatchEvent(new FocusEvent('focusin',{bubbles:true})); })()`);
-  // Browser-default activation is absent from DOM-dispatched keys in a hidden
-  // Electron window. Model it only when the app did not consume the key.
+  // Mail rows must open from their actual key handler, with no artificial click.
+  // Other native controls still use a modeled default in this DOM-only check.
   const enter = async () => evaluate(`(() => {
     const target=document.activeElement;
-    if (target.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true})) && target.matches('button')) target.click();
+    const unhandled=target.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true}));
+    if (target.matches('button[data-posting-id]')) {
+      if (unhandled) throw new Error('Mail-row Enter was not handled; do not substitute a click.');
+    } else if (unhandled && target.matches('button')) target.click();
   })()`);
   const back = async () => {
     await evaluate("(() => { const panel=document.querySelector('.thread-panel'); panel.tabIndex=-1; panel.focus(); })()");

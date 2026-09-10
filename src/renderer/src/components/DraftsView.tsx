@@ -1,4 +1,5 @@
 import { focusRecipient, useComposerKeyboard } from "../composer-keyboard";
+import { confirmAction } from "./ConfirmAction";
 import { useShortcutHints } from "../shortcut-context";
 import { FileEdit, RefreshCw, Save, Send, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -78,7 +79,7 @@ export default function DraftsView({ onNotice, target, onTargetMissing, refreshT
   };
 
   const remove = async () => {
-    if (!selected || saving || !window.confirm("Delete this draft?")) return;
+    if (!selected || saving || !await confirmAction("This draft will be deleted from HEY.", "Delete draft")) return;
     setSaving(true); setError(undefined);
     try { const result = await window.heyAgent.mail.deleteDraft(selected.id); appSound.play("delete", "mail"); onNotice(result.message); setSelected(undefined); await refresh(); }
     catch (reason) { appSound.play("error", "mail"); setError(reason instanceof Error ? reason.message : "HEY could not delete this draft."); }

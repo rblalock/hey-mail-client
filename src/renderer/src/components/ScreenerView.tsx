@@ -1,5 +1,6 @@
 import { Check, CircleAlert, ExternalLink, Inbox, Newspaper, ReceiptText, RefreshCw, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { confirmAction } from "./ConfirmAction";
 import { matchesBindingStep } from "../../../shared/shortcut-binding";
 import { isEditableTarget } from "../shortcuts";
 import type { AgentObjectLink, MailThread, MailboxKey, ScreenerEntry, ScreenerResult } from "../../../shared/contracts";
@@ -70,7 +71,7 @@ export default function ScreenerView({ onNotice, onOpenObject }: ScreenerViewPro
   };
 
   const decide = async (entry: ScreenerEntry, decision: "approve" | "deny", destination?: MailboxKey, spam = false) => {
-    if (decision === "deny" && !window.confirm(spam ? `Say No to ${entry.sender.name} and mark this as spam? This trains HEY's filters.` : `Say No to ${entry.sender.name}? Their current and future email won't appear in HEY.`)) return;
+    if (decision === "deny" && !await confirmAction(spam ? `Say No to ${entry.sender.name} and mark this as spam? This trains HEY's filters.` : `Say No to ${entry.sender.name}? Their current and future email won't appear in HEY.`, spam ? "Mark as spam" : "Screen out sender")) return;
     setWorkingId(entry.id);
     try {
       const response = await window.heyAgent.mail.decideScreener({ id: entry.id, decision, ...(destination ? { destination } : {}), ...(spam ? { spam: true } : {}) });
