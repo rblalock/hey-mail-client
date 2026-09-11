@@ -23,6 +23,7 @@ const api: HeyAgentApi = {
     decideScreener: (request) => invoke("mail:decide-screener", request),
     listLibrary: (kind) => invoke("mail:list-library", kind),
     readLibrarySource: (kind, id) => invoke("mail:read-library-source", kind, id),
+    listLibraryThreads: (kind, id, page) => invoke("mail:list-library-threads", kind, id, page),
     showContact: (id) => invoke("mail:show-contact", id),
     readBundle: (id) => invoke("mail:read-bundle", id),
     listContactThreads: (id) => invoke("mail:list-contact-threads", id),

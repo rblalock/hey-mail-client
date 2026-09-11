@@ -303,6 +303,7 @@ export function previewApi(): HeyAgentApi {
       decideScreener: async () => ({ message: "Screener updated." }),
       listLibrary: async (kind) => ({ kind, items: kind === "contacts" ? postings.map((posting, index) => ({ id: String(index), title: posting.sender.name, subtitle: posting.sender.email, contact: posting.sender })) : [] }),
       readLibrarySource: async (kind, id) => ({ kind, id, title: kind === "labels" ? "Launch" : "Fall launch", totalCount: 3, postings: postings.slice(0, 3) }),
+      listLibraryThreads: async (kind, id) => ({ kind, id, title: kind === "labels" ? "Launch" : kind === "collections" ? "Fall launch" : "Conversations", totalCount: 3, postings: postings.slice(0, 3) }),
       showContact: async (id) => {
         const source = postings.flatMap((posting) => posting.contacts).find((contact) => contact.id === id) ?? postings[Number(id)]?.contacts[0];
         return { ...source, id, name: source?.name ?? "Contact", email: source?.email ?? "contact@example.com", aliases: [], note: "", status: "approved" };

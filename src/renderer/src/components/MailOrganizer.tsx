@@ -1,6 +1,6 @@
-import { Check, FolderKanban, Minus, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
+import { ArrowUpRight, Check, FolderKanban, Minus, Plus, RefreshCw, Search, Tag, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ImboxPosting, MailOrganization, MailOrganizationItem, MailOrganizationKind, MailOrganizationMutationRequest } from "../../../shared/contracts";
+import type { AgentObjectLink, ImboxPosting, MailOrganization, MailOrganizationItem, MailOrganizationKind, MailOrganizationMutationRequest } from "../../../shared/contracts";
 import { isTopmostDialogScrim } from "../dialog-stack";
 import { filterOrganizationItems, organizationTargets, organizationToggleAction } from "../mail-organization";
 import { appSound } from "../sound";
@@ -10,9 +10,10 @@ type MailOrganizerProps = {
   initialKind?: MailOrganizationKind;
   onClose: () => void;
   onNotice: (message: string) => void;
+  onOpenObject?: (object: AgentObjectLink) => void;
 };
 
-export default function MailOrganizer({ postings, initialKind = "labels", onClose, onNotice }: MailOrganizerProps) {
+export default function MailOrganizer({ postings, initialKind = "labels", onClose, onNotice, onOpenObject }: MailOrganizerProps) {
   const { postingIds, topicIds } = useMemo(() => organizationTargets(postings), [postings]);
   const [organization, setOrganization] = useState<MailOrganization>();
   const [loading, setLoading] = useState(true);
@@ -115,7 +116,10 @@ export default function MailOrganizer({ postings, initialKind = "labels", onClos
         <label className="organizer-filter"><Search size={13} /><input data-organizer-field={labels ? "label-query" : "collection-query"} value={query} onChange={(event) => labels ? setLabelQuery(event.target.value) : setCollectionQuery(event.target.value)} placeholder={labels ? "Filter labels" : "Filter Collections"} aria-label={labels ? "Filter labels" : "Filter Collections"} /></label>
         {skippedCount > 0 && <p className="organizer-eligibility">{skippedCount} selected {skippedCount === 1 ? "row is" : "rows are"} missing the HEY {labels ? "posting" : "thread"} ID this action requires and will be skipped.</p>}
         <div className="organizer-options">
-          {visibleItems.map((item) => <button type="button" role="checkbox" aria-checked={item.membership === "some" ? "mixed" : item.membership === "all"} key={item.id} disabled={Boolean(busy)} onClick={() => toggle(kind, item)}><span className="organizer-check">{item.membership === "all" ? <Check size={13} /> : item.membership === "some" ? <Minus size={13} /> : null}</span><span><strong>{item.name}</strong>{(item.summary || item.membership === "some") && <small>{[item.summary, item.membership === "some" ? `${item.memberCount} of ${targetCount} selected` : ""].filter(Boolean).join(" · ")}</small>}</span>{busy === `${kind}:${item.id}` && <RefreshCw size={13} className="is-spinning" />}</button>)}
+          {visibleItems.map((item) => <div className="organizer-option-row" key={item.id}>
+            <button type="button" role="checkbox" aria-checked={item.membership === "some" ? "mixed" : item.membership === "all"} disabled={Boolean(busy)} onClick={() => toggle(kind, item)}><span className="organizer-check">{item.membership === "all" ? <Check size={13} /> : item.membership === "some" ? <Minus size={13} /> : null}</span><span><strong>{item.name}</strong>{(item.summary || item.membership === "some") && <small>{[item.summary, item.membership === "some" ? `${item.memberCount} of ${targetCount} selected` : ""].filter(Boolean).join(" · ")}</small>}</span>{busy === `${kind}:${item.id}` && <RefreshCw size={13} className="is-spinning" />}</button>
+            {onOpenObject && <button type="button" className="organizer-browse" disabled={Boolean(busy)} aria-label={`Browse ${item.name}`} title={`Browse ${item.name}`} onClick={() => { onClose(); onOpenObject({ kind: labels ? "label" : "collection", id: item.id, title: item.name, deepLink: `hey-agent://mail/${kind}/${item.id}` }); }}><ArrowUpRight size={15} /><span>Browse</span></button>}
+          </div>)}
           {items.length === 0 ? <p>No {labels ? "labels" : "Collections"} yet.</p> : visibleItems.length === 0 ? <p>No matches for “{query.trim()}”.</p> : null}
         </div>
         <form className="organizer-create" onSubmit={(event) => create(event, kind)}><input data-organizer-field={labels ? "label-name" : "collection-name"} maxLength={120} value={name} onChange={(event) => labels ? setLabelName(event.target.value) : setCollectionName(event.target.value)} placeholder={labels ? "New label" : "New Collection"} aria-label={labels ? "New label name" : "New Collection name"} /><button type="submit" className="secondary-button" disabled={Boolean(busy) || !name.trim()}><Plus size={13} /> Create and add</button></form>

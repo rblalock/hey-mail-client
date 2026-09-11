@@ -482,6 +482,11 @@ export type MailLibrarySourceResult = {
   postings: ImboxPosting[];
 };
 
+export type MailLibraryThreads = Omit<MailLibrarySourceResult, "kind" | "totalCount"> & {
+  kind: MailLibraryKind;
+  totalCount?: number;
+};
+
 export type MailContactDetail = MailContact & {
   id: string;
   email: string;
@@ -899,6 +904,7 @@ export type HeyAgentApi = {
     decideScreener(request: ScreenerDecisionRequest): Promise<{ message: string }>;
     listLibrary(kind: MailLibraryKind): Promise<MailLibraryResult>;
     readLibrarySource(kind: Exclude<MailLibraryKind, "contacts">, id: string): Promise<MailLibrarySourceResult>;
+    listLibraryThreads(kind: MailLibraryKind, id: string, page?: string): Promise<MailLibraryThreads>;
     showContact(id: string): Promise<MailContactDetail>;
     readBundle(id: string): Promise<MailThreadListing>;
     listContactThreads(id: string): Promise<MailThreadListing>;

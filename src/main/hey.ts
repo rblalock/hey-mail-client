@@ -1,7 +1,7 @@
 import type {
   BulkReplyPreview, BulkReplySendRequest, BulkReplySendResult, BulkReplyUndoResult, ImboxPosting, ImboxResult, MailContact, MailContactDetail, MailDraft, MailDraftUpdate, MailLibraryKind, MailLibraryResult, MailMutationRequest, MailMutationResult,
   MailLibrarySourceResult, MailOrganization, MailOrganizationItem, MailOrganizationMutationRequest, MailOrganizationTarget, MailOverview, MailReplyContext, MailSearchFilters, MailSearchOption, MailSearchRequest, MailSearchResult, MailSendRequest, MailSendResult, MailThread, MailThreadListing, MailboxKey, SetAsideGroupMutationRequest,
-  ScreenerDecisionRequest, ScreenerResult, ThreadEntry,
+  ScreenerDecisionRequest, ScreenerResult, ThreadEntry, MailLibraryThreads,
 } from "../shared/contracts";
 import { parseThreadHtmlDocument } from "./email-html";
 import { listMailAttachments, withMailAttachments } from "./mail-attachments";
@@ -423,6 +423,27 @@ export async function readLibrarySource(kind: MailLibrarySourceResult["kind"], i
   if (!executable) throw new Error("HEY CLI is unavailable.");
   const { stdout } = await runFile(executable, librarySourceCommand(kind, id), { env, timeoutMs: 20_000 });
   return parseLibrarySourceJson(kind, stdout, id);
+}
+
+export function libraryThreadsCommand(kind: MailLibraryKind, id: string, page?: string): string[] {
+  if (!["contacts", "labels", "collections"].includes(kind) || !/^\d+$/.test(id)) throw new Error("Invalid HEY library source.");
+  if (page !== undefined && (typeof page !== "string" || !page.trim() || page.length > 4096 || /[\x00-\x1f]/.test(page))) throw new Error("Invalid HEY library page.");
+  const source = kind === "contacts" ? ["contact", "threads"] : [kind === "labels" ? "label" : "collection", "view"];
+  return [...source, id, "--limit", "50", ...(page ? ["--page", page] : []), "--json"];
+}
+
+export function parseLibraryThreadsJson(kind: MailLibraryKind, stdout: string, id: string): MailLibraryThreads {
+  if (kind !== "contacts") return parseLibrarySourceJson(kind, stdout, id);
+  const listing = parseThreadListingJson("contact", stdout, id);
+  return { kind, id: listing.id, title: listing.title, postings: listing.postings, nextPage: listing.nextPage };
+}
+
+export async function listLibraryThreads(kind: MailLibraryKind, id: string, page?: string, env: NodeJS.ProcessEnv = process.env): Promise<MailLibraryThreads> {
+  const command = libraryThreadsCommand(kind, id, page);
+  const executable = await findExecutable("hey", env);
+  if (!executable) throw new Error("HEY CLI is unavailable.");
+  const { stdout } = await runFile(executable, command, { env, timeoutMs: 30_000 });
+  return parseLibraryThreadsJson(kind, stdout, id);
 }
 
 function numericTarget(value: string | undefined, label: string, required: boolean): string | undefined {

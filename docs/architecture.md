@@ -18,6 +18,8 @@ Keep account, posting, topic, contact, draft, and clearance IDs distinct. Calend
 
 Native `hey-agent:` links open the existing center surface. Missing objects stay missing; an explicit read-only request can ask Pi to find possible matches. Never silently replace an ID using a similar name.
 
+Library opens contacts, labels, and Collections into conversation lists, using 50-thread cursor pages. AI object previews remain limited to four threads. Returning from a Library conversation retains its loaded pages, filter, and scroll. HEY CLI 1.4.3 only lists attachments per thread, so there is no aggregated All Files or contact-files browser; do not build a background mailbox crawler to approximate one.
+
 ## Linked profiles
 
 - Linked accounts under one HEY login have separate mail, drafts, chats, history, and pending actions. No All Accounts view or separate-login support.

@@ -31,6 +31,7 @@ import { cleanupMailAttachmentDownloads, downloadMailAttachment, resolveMailAtta
 import { canOpenMailAttachment } from "../shared/mail-attachments";
 import { previewCalendarInvite } from "./mail-calendar-invite";
 import { HeyAccountScope } from "../../resources/hey-account-scope.mjs";
+import { listLibraryThreads } from "./hey";
 import { DeferredTrash } from "../shared/deferred-trash";
 import { acknowledgeHeyWrites, pendingHeyWrites } from "../../resources/hey-write-receipts.mjs";
 
@@ -188,6 +189,11 @@ function registerIpc(): void {
     return readLibrarySource(kind, assertNumericId(id, kind === "labels" ? "label" : "collection"));
   });
   handle("mail:show-contact", (_event, id) => showContact(assertNumericId(id, "contact")));
+  handle("mail:list-library-threads", (_event, kind, id, page) => {
+    if (kind !== "contacts" && kind !== "labels" && kind !== "collections") throw new Error("Invalid HEY library source.");
+    if (page !== undefined && typeof page !== "string") throw new Error("Invalid HEY library page.");
+    return listLibraryThreads(kind, assertNumericId(id, "library source"), page);
+  });
   handle("mail:read-bundle", (_event, id) => readBundle(assertNumericId(id, "bundle")));
   handle("mail:list-contact-threads", (_event, id) => listContactThreads(assertNumericId(id, "contact")));
   handle("mail:update-set-aside-group", (_event, request) => {
