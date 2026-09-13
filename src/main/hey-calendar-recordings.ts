@@ -27,7 +27,9 @@ const validDate = (value: unknown): value is string => typeof value === "string"
 const validId = (value: unknown): value is string => typeof value === "string" && /^\d+$/.test(value);
 const validTimestamp = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(value);
 const validFreeText = (value: unknown, maximum: number, allowEmpty = false): value is string =>
-  typeof value === "string" && value.length <= maximum && (allowEmpty || value.trim().length > 0) && !value.trim().startsWith("-");
+  typeof value === "string" && value.length <= maximum && (allowEmpty || value.trim().length > 0);
+const validBareFreeText = (value: unknown, maximum: number): value is string =>
+  validFreeText(value, maximum) && !value.trim().startsWith("-");
 
 function parseEnvelope(stdout: string): unknown {
   const payload: unknown = JSON.parse(stdout);
@@ -350,7 +352,7 @@ export async function exportCalendarTimeTracks(path: string, env: NodeJS.Process
 
 export function isCalendarTodoCreateRequest(value: unknown): value is CalendarTodoCreateRequest {
   const request = record(value);
-  return validFreeText(request.title, 300) && (request.date === undefined || validDate(request.date));
+  return validBareFreeText(request.title, 300) && (request.date === undefined || validDate(request.date));
 }
 export function isCalendarTodoCompletionRequest(value: unknown): value is CalendarTodoCompletionRequest {
   const request = record(value); return validId(request.id) && typeof request.completed === "boolean";
@@ -379,5 +381,5 @@ export function isCalendarTimeTrackUpdateRequest(value: unknown): value is Calen
 }
 
 export function isCalendarTimeCategoryTitle(value: unknown): value is string {
-  return validFreeText(value, 200);
+  return validBareFreeText(value, 200);
 }
