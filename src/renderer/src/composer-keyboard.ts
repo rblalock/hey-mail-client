@@ -2,6 +2,7 @@ import { useContext, useEffect, useRef, type KeyboardEvent, type RefObject } fro
 import { ShortcutContext } from "./shortcut-context";
 import { matchesShortcut, type ShortcutId } from "./shortcuts";
 import { isShortcutEvent } from "../../shared/shortcut-binding";
+import { isNativeEditingShortcut } from "../../shared/keyboard-scope";
 
 export function trapFocus(event: KeyboardEvent, root: HTMLElement) {
   if (event.key !== "Tab") return;
@@ -36,8 +37,10 @@ export function useComposerKeyboard(actions: Partial<Record<ShortcutId, () => vo
     if (event.defaultPrevented) return;
     // Inner dialogs and suggestion lists own their keystrokes first.
     if (!isShortcutEvent(event.nativeEvent)) { event.stopPropagation(); return; }
+    // Preserve browser editing, even if a saved custom composer binding conflicts.
+    if (isNativeEditingShortcut(event.nativeEvent)) { event.stopPropagation(); return; }
     if (modal) trapFocus(event, event.currentTarget);
-    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close?.(); return; }
+    if (event.key === "Escape" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); close?.(); return; }
     const command = shortcuts.find((item) => item.scope === "composer" && matchesShortcut(event.nativeEvent, item));
     if (command) { event.preventDefault(); actions[command.id]?.(); }
     // A composer is a local keyboard scope, even when its action is disabled.

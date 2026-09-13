@@ -4,6 +4,8 @@ import { activateMailRow } from "../mail-row-keyboard";
 import type { ImboxPosting, MailThreadListing } from "../../../shared/contracts";
 import { appSound } from "../sound";
 import ContactAvatar from "./ContactAvatar";
+import { isShortcutEvent } from "../../../shared/shortcut-binding";
+import { isEditingEvent, isLocalKeyboardEvent } from "../../../shared/keyboard-scope";
 
 type ThreadListingViewProps = {
   listing?: MailThreadListing;
@@ -31,9 +33,10 @@ export default function ThreadListingView({ listing, loading, error, onBack, onO
   const highlightedIndex = useMemo(() => postings.findIndex((item) => item.id === highlightedId), [highlightedId, postings]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !isShortcutEvent(event, ["ArrowDown", "ArrowUp", "j", "k"].includes(event.key)) || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
       if (!panelRef.current?.contains(document.activeElement) && document.activeElement !== document.body) return;
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
+      if (isEditingEvent(event) || isLocalKeyboardEvent(event)) return;
       const key = event.key.toLowerCase();
       if (event.key === "Escape") { event.preventDefault(); onBack(); return; }
       // Native activation belongs to the focused row or header control.

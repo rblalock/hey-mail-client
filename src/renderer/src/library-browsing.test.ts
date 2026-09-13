@@ -19,7 +19,7 @@ describe("Library page merging", () => {
 
 describe("local Library keyboard navigation", () => {
   function fixture(key: string, index = 0, editable = false) {
-    const rows = Array.from({ length: 3 }, () => ({ focus: vi.fn(), contains: () => false, closest: () => editable ? {} : null }));
+    const rows = Array.from({ length: 3 }, () => ({ nodeType: 1, tagName: editable ? "INPUT" : "BUTTON", focus: vi.fn(), contains: () => false, closest: () => null }));
     const event = { key, target: rows[index], currentTarget: { querySelectorAll: () => rows }, preventDefault: vi.fn(), stopPropagation: vi.fn() };
     return { rows, event, run: () => navigateLibraryRows(event as unknown as KeyboardEvent<HTMLElement>) };
   }

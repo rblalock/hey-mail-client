@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ImboxPosting } from "../../shared/contracts";
-import { attachmentForPosting, attachmentsForPostings, contextualAgentCommands, contextualAgentPrompt, continueReplyPrompt, unattachedMailContext } from "./agent-context-actions";
+import { attachmentForPosting, attachmentsForPostings, contextualAgentCommands, contextualAgentPrompt, continueReplyPrompt, mailContextAddState, unattachedMailContext } from "./agent-context-actions";
 
 const posting = (id: string, topicId = id): ImboxPosting => ({
   id,
@@ -15,6 +15,19 @@ const posting = (id: string, topicId = id): ImboxPosting => ({
 });
 
 describe("agent context actions", () => {
+  it("labels single, bulk, partial and already-added context", () => {
+    const attachments = attachmentsForPostings([posting("1"), posting("2"), posting("3")]);
+    expect(mailContextAddState(attachments.slice(0, 1), []).label).toBe("Add email to chat");
+    expect(mailContextAddState(attachments, []).label).toBe("Add 3 conversations to chat");
+    expect(mailContextAddState(attachments, attachments.slice(0, 2))).toMatchObject({ label: "Add 1 remaining conversation to chat", missing: [attachments[2]] });
+    expect(mailContextAddState(attachments, attachments)).toMatchObject({ label: "Selection added", missing: [] });
+  });
+
+  it("counts existing mixed attachments towards the limit without counting duplicates twice", () => {
+    const attachments = attachmentsForPostings(Array.from({ length: 25 }, (_, i) => posting(String(i))));
+    expect(mailContextAddState([...attachments, attachments[0]!], attachments).limitMessage).toBeUndefined();
+    expect(mailContextAddState(attachments, [{ kind: "local-file", id: "file" }]).limitMessage).toContain("25 attachments");
+  });
   it("turns mail postings into stable, deduplicated thread attachments", () => {
     expect(attachmentForPosting(posting("1"), "imbox")).toMatchObject({ kind: "hey-thread", id: "1", sourceBox: "imbox" });
     expect(attachmentsForPostings([posting("1"), posting("2", "1")], "imbox")).toHaveLength(1);

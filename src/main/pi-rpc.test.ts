@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildPiRpcArgs, HEY_AGENT_SYSTEM_PROMPT, JsonLineDecoder, parseHeyAppAction, parseHeyApproval, parseHeyArtifact, PiRpcSession } from "./pi-rpc";
 
 describe("Pi JSONL decoding", () => {
@@ -16,6 +16,22 @@ describe("Pi JSONL decoding", () => {
 });
 
 describe("Pi Helper startup", () => {
+  it("sends thread references through RPC without starting Pi or reading email bodies", async () => {
+    const session = new PiRpcSession({ id: "refs", title: "Chat", workingDirectory: "/synthetic", attachments: [
+      { kind: "hey-thread", id: "42", title: "Planning", subtitle: "Maya" },
+      { kind: "hey-thread", id: "43", title: "Budget", subtitle: "Robin" },
+    ] });
+    const internals = session as unknown as { ensureStarted(): Promise<void>; request(value: Record<string, unknown>): Promise<Record<string, unknown>>; persist(): Promise<void> };
+    vi.spyOn(internals, "ensureStarted").mockResolvedValue();
+    vi.spyOn(internals, "persist").mockResolvedValue();
+    const request = vi.spyOn(internals, "request").mockResolvedValue({});
+    await session.send("Compare them");
+    const prompt = request.mock.calls.find(([value]) => value.type === "prompt")?.[0].message;
+    expect(prompt).toContain('"topic_id":"42"');
+    expect(prompt).toContain('"topic_id":"43"');
+    expect(prompt).toContain("references only, not message bodies");
+    expect(session.peekSnapshot().timeline[0]).toMatchObject({ role: "user", text: "Compare them" });
+  });
   it("injects captured personal instructions as one argument, preserving normal Pi tools and approvals", () => {
     const instructions = "Summarize in two bullets.\nLiteral text: --tools bash; $(not-a-command)";
     const args = buildPiRpcArgs({ helperInstructions: { title: "Project notes", instructions }, extensionPath: "/app/hey-agent-pi-extension.mjs", modelProfile: { model: { provider: "openai", modelId: "fast" }, thinking: "low" } }, "/sessions/existing.jsonl");
@@ -52,7 +68,7 @@ describe("Pi Helper startup", () => {
     expect(HEY_AGENT_SYSTEM_PROMPT).toContain("never invent an object ID");
   });
 
-  it("shows the user's request while Pi and attached context are still loading", async () => {
+  it("shows the user's request while Pi is still starting", async () => {
     const session = new PiRpcSession({
       id: "helper-session",
       title: "Reply Coach · Launch review",
@@ -60,9 +76,9 @@ describe("Pi Helper startup", () => {
       helperId: "reply-coach",
       env: { HOME: "", PATH: "" },
     });
-    const contextStillLoading = new Promise<never>(() => undefined);
 
-    const pending = session.send("Write the reply", contextStillLoading);
+
+    const pending = session.send("Write the reply");
     const snapshot = session.peekSnapshot();
 
     expect(snapshot.status).toBe("starting");

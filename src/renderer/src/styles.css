@@ -2359,6 +2359,8 @@ kbd {
   font-size: 11px;
 }
 .agent-add-context:hover { background: var(--hover) !important; color: var(--ink) !important; }
+.agent-context-notice { flex: 0 0 100%; color: var(--ink-2); font-size: 12px; line-height: 1.4; }
+.agent-context-row:has(.agent-context-notice) { flex-wrap: wrap; }
 .agent-use-in-composer {
   display: inline-flex;
   min-height: 27px;

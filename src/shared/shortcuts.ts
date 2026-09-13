@@ -1,6 +1,7 @@
 import { DEFAULT_AI_SETTINGS, DEFAULT_SOUND_SETTINGS, type AppSettings, type ShortcutProfile } from "./contracts";
 import { matchesBindingStep, normalizeBindings, isShortcutEvent } from "./shortcut-binding";
 import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, type HelperId } from "./helpers";
+import { isNativeEditingBinding } from "./keyboard-scope";
 
 export type ShortcutId =
   | "commands" | "search" | "compose" | "next" | "previous" | "open" | "back" | "undo-trash"
@@ -115,10 +116,7 @@ export function resolveShortcuts(settings: AppSettings = DEFAULT_SETTINGS): Shor
 
 export const SHORTCUTS = resolveShortcuts();
 
-export function isEditableTarget(target: EventTarget | null): boolean {
-  const element = target instanceof HTMLElement ? target : undefined;
-  return Boolean(element?.isContentEditable || element && ["INPUT", "TEXTAREA", "SELECT"].includes(element.tagName));
-}
+export { isEditableTarget } from "./keyboard-scope";
 
 
 export function matchesShortcut(event: KeyboardEvent, definition: ShortcutDefinition): boolean {
@@ -147,6 +145,7 @@ export function validateCustomShortcuts(value: Record<string, string[]>): Record
     const entry = CATALOG.find((item) => item.id === id);
     if (!entry) throw new Error(`Unknown shortcut command: ${id}.`);
     normalized[id] = normalizeBindings(bindings);
+    if (entry.scope === "composer" && normalized[id]!.some(isNativeEditingBinding)) throw new Error("That shortcut is reserved for text editing (select, copy, paste, undo, or formatting). Choose another combination.");
     if (entry.scope === "composer" && normalized[id]!.some((key) => key.includes(" ") || !/^(mod|ctrl|meta)\+/.test(key))) throw new Error("Composer shortcuts need Ctrl or Meta and a single step, so ordinary typing stays safe.");
     if (normalized[id]!.some((key) => /^(mod|ctrl)\+(?:shift\+)?(?:q|r|w)$/.test(key) && !["session-close"].includes(id))) throw new Error("That shortcut is reserved for window/session controls. Choose another combination.");
   }

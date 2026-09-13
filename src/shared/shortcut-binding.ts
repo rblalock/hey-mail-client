@@ -22,8 +22,8 @@ export function normalizeBindings(value: unknown): string[] {
   return [...new Set(value.map(normalizeBinding))];
 }
 
-export type KeyEvent = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> & Partial<Pick<KeyboardEvent, "repeat" | "isComposing" | "keyCode">>;
-export function isShortcutEvent(event: KeyEvent, allowRepeat = false): boolean { return (allowRepeat || !event.repeat) && !event.isComposing && event.keyCode !== 229; }
+export type KeyEvent = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> & Partial<Pick<KeyboardEvent, "repeat" | "isComposing" | "keyCode" | "getModifierState">>;
+export function isShortcutEvent(event: KeyEvent, allowRepeat = false): boolean { return (allowRepeat || !event.repeat) && !event.isComposing && event.keyCode !== 229 && !event.getModifierState?.("AltGraph"); }
 
 export function matchesBindingStep(event: KeyEvent, binding: string, allowRepeat = false): boolean {
   if (!isShortcutEvent(event, allowRepeat)) return false;

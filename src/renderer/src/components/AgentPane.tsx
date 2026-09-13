@@ -15,11 +15,15 @@ import AgentObjectPreview from "./AgentObjectPreview";
 import MorphingIcon from "./MorphingIcon";
 import RailMorphButton from "./RailMorphButton";
 import { helperById } from "../../../shared/helpers";
+import AgentMailContextAction from "./AgentMailContextAction";
+import { matchesBindingStep } from "../../../shared/shortcut-binding";
 
 type AgentPaneProps = {
   workspace: AgentWorkspace;
   onWorkspace: (workspace: AgentWorkspace) => void;
   posting?: ImboxPosting;
+  contextAttachments?: AgentThreadAttachment[];
+  unavailableContextCount?: number;
   mailbox?: MailboxKey;
   standalone?: boolean;
   initialDraft?: string;
@@ -167,11 +171,11 @@ function UiRequestCard({ tabId, request }: { tabId: string; request: AgentUiRequ
         {request.heyAction.fields.map((field) => <div key={`${field.label}-${field.value}`}><dt>{field.label}</dt><dd>{field.value}</dd></div>)}
         {editableApproval && <div className="agent-approval-editable"><dt>{editableApproval.label}</dt><dd>{editingApproval
           ? <textarea ref={editorRef} aria-label={editableApproval.label} value={value} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => {
-            if (event.key === "Escape") {
+            if (matchesBindingStep(event.nativeEvent, "escape")) {
               event.preventDefault();
               setEditingApproval(false);
               requestAnimationFrame(() => editButtonRef.current?.focus());
-            } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && validEdit) {
+            } else if (matchesBindingStep(event.nativeEvent, "mod+enter") && validEdit) {
               event.preventDefault();
               void respond({ value });
             }
@@ -253,10 +257,11 @@ function SessionTabs({ workspace, snapshot, attachment, onWorkspace, onError, on
   </div>;
 }
 
-export default function AgentPane({ workspace, onWorkspace, posting, mailbox, standalone = false, initialDraft, focusRequest = 0, onInitialDraftConsumed, onUseInComposer, onClose, closeShortcut, sound, onOpenObject }: AgentPaneProps) {
+export default function AgentPane({ workspace, onWorkspace, posting, contextAttachments, unavailableContextCount = 0, mailbox, standalone = false, initialDraft, focusRequest = 0, onInitialDraftConsumed, onUseInComposer, onClose, closeShortcut, sound, onOpenObject }: AgentPaneProps) {
   const snapshot = workspace.activeSession;
   const helper = snapshot.helperInstructions ?? (snapshot.helperId ? helperById(snapshot.helperId) : undefined);
   const currentAttachment = useMemo(() => attachmentFor(posting, mailbox), [mailbox, posting]);
+  const contextCandidates = contextAttachments ?? (currentAttachment ? [currentAttachment] : []);
   const [draft, setDraft] = useProfileValue(`chat:${snapshot.tabId}:input`, "");
   const [localError, setLocalError] = useState<string>();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -284,7 +289,7 @@ export default function AgentPane({ workspace, onWorkspace, posting, mailbox, st
   const streaming = snapshot.timeline.some((item) => item.kind === "message" && item.role === "assistant" && item.state === "streaming");
   const activeRun = snapshot.timeline.some((item) => item.kind === "run" && item.state === "running");
   const busy = snapshot.status === "starting" || snapshot.status === "running";
-  const showContextRow = snapshot.attachments.length > 0 || Boolean(currentAttachment && !attachedCurrent);
+  const showContextRow = snapshot.attachments.length > 0 || contextCandidates.length > 0 || unavailableContextCount > 0;
   const activeError = localError || snapshot.error;
 
   useEffect(() => {
@@ -333,9 +338,9 @@ export default function AgentPane({ workspace, onWorkspace, posting, mailbox, st
       {snapshot.pendingUiRequest && <UiRequestCard tabId={snapshot.tabId} request={snapshot.pendingUiRequest} />}
       {hasConversation && activeError && <div className="agent-error"><AlertCircle size={14} /><span>{activeError}</span></div>}
     </div>
-    <div className="agent-composer">
-      {showContextRow && <div className="agent-context-row" aria-label="Session context">{snapshot.attachments.length > 2 ? <details className="agent-context-group"><summary><Mail size={12} /><span>{snapshot.attachments.length} {snapshot.attachments.every((item) => item.kind === "hey-thread") ? "conversations" : "items"}</span><ChevronDown size={12} /></summary><div>{snapshot.attachments.map((attachment) => <span className={`agent-context-chip is-${attachment.kind}`} key={`${attachment.kind}:${attachment.id}`} title={attachment.kind === "local-file" ? attachment.path : attachment.title}><AttachmentIcon attachment={attachment} /><span>{attachment.title}</span><button type="button" title="Remove from session" aria-label={`Remove ${attachment.title} from session`} onClick={() => void window.heyAgent.agent.detach(snapshot.tabId, attachment.id).then((next) => { appSound.play("deselect", "interface"); onWorkspace(next); })}><X size={11} /></button></span>)}</div></details> : snapshot.attachments.map((attachment) => <span className={`agent-context-chip is-${attachment.kind}`} key={`${attachment.kind}:${attachment.id}`} title={attachment.kind === "local-file" ? attachment.path : attachment.title}><AttachmentIcon attachment={attachment} /><span>{attachment.title}</span><button type="button" title="Remove from session" aria-label={`Remove ${attachment.title} from session`} onClick={() => void window.heyAgent.agent.detach(snapshot.tabId, attachment.id).then((next) => { appSound.play("deselect", "interface"); onWorkspace(next); })}><X size={11} /></button></span>)}{currentAttachment && !attachedCurrent && <button type="button" className="agent-add-context" onClick={() => void window.heyAgent.agent.attach(snapshot.tabId, currentAttachment).then((next) => { appSound.play("drop", "interface"); onWorkspace(next); })}><Paperclip size={13} /> Add email to session</button>}</div>}
-      <textarea ref={composerRef} aria-label={`Message ${helper?.title ?? "HEY Agent"}`} data-tooltip="Focus AI chat composer" data-shortcut-id="focus-agent" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send(); } }} placeholder={helper ? `Ask ${helper.title}…` : snapshot.attachments.length ? "Ask about the emails in this session…" : "Message HEY Agent…"} disabled={snapshot.status === "starting"} />
+    <div className="agent-composer" data-keyboard-scope="editor">
+      {showContextRow && <div className="agent-context-row" aria-label="Session context">{snapshot.attachments.length > 2 ? <details className="agent-context-group"><summary><Mail size={12} /><span>{snapshot.attachments.length} {snapshot.attachments.every((item) => item.kind === "hey-thread") ? "conversations" : "items"}</span><ChevronDown size={12} /></summary><div>{snapshot.attachments.map((attachment) => <span className={`agent-context-chip is-${attachment.kind}`} key={`${attachment.kind}:${attachment.id}`} title={attachment.kind === "local-file" ? attachment.path : attachment.title}><AttachmentIcon attachment={attachment} /><span>{attachment.title}</span><button type="button" title="Remove from session" aria-label={`Remove ${attachment.title} from session`} onClick={() => void window.heyAgent.agent.detach(snapshot.tabId, attachment.id).then((next) => { appSound.play("deselect", "interface"); onWorkspace(next); })}><X size={11} /></button></span>)}</div></details> : snapshot.attachments.map((attachment) => <span className={`agent-context-chip is-${attachment.kind}`} key={`${attachment.kind}:${attachment.id}`} title={attachment.kind === "local-file" ? attachment.path : attachment.title}><AttachmentIcon attachment={attachment} /><span>{attachment.title}</span><button type="button" title="Remove from session" aria-label={`Remove ${attachment.title} from session`} onClick={() => void window.heyAgent.agent.detach(snapshot.tabId, attachment.id).then((next) => { appSound.play("deselect", "interface"); onWorkspace(next); })}><X size={11} /></button></span>)}<AgentMailContextAction key={snapshot.tabId} candidates={contextCandidates} snapshot={snapshot} onWorkspace={onWorkspace} onFocusComposer={() => composerRef.current?.focus()} onError={setLocalError} />{unavailableContextCount > 0 && <span className="agent-context-notice" role="status">{unavailableContextCount} selected {unavailableContextCount === 1 ? "bundle cannot" : "bundles cannot"} be attached. Select individual conversations instead.</span>}</div>}
+      <textarea ref={composerRef} aria-label={`Message ${helper?.title ?? "HEY Agent"}`} data-tooltip="Focus AI chat composer" data-shortcut-id="focus-agent" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (matchesBindingStep(event.nativeEvent, "mod+enter")) { event.preventDefault(); event.stopPropagation(); void send(); } }} placeholder={helper ? `Ask ${helper.title}…` : snapshot.attachments.length ? "Ask about the emails in this session…" : "Message HEY Agent…"} disabled={snapshot.status === "starting"} />
       <div className="agent-composer-footer"><AttachmentMenu snapshot={snapshot} onWorkspace={onWorkspace} onFocusComposer={focusComposer} /><button type="button" className={snapshot.status === "running" ? "agent-stop" : undefined} aria-label={snapshot.status === "running" ? `Stop ${helper?.title ?? "HEY Agent"}` : `Send to ${helper?.title ?? "HEY Agent"}`} data-tooltip={snapshot.status === "running" ? `Stop ${helper?.title ?? "HEY Agent"}` : `Send to ${helper?.title ?? "HEY Agent"}`} data-shortcut={snapshot.status === "running" ? undefined : "Ctrl+Enter"} data-tooltip-side="top" disabled={snapshot.status !== "running" && (!draft.trim() || busy)} onClick={() => snapshot.status === "running" ? void stop() : void send()}><MorphingIcon icon={snapshot.status === "running" ? CircleStopData : SendData} size={16} /></button></div>
     </div>
   </div>;

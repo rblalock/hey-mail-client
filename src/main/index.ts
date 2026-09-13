@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
 import type {
-  AgentAttachment, AgentMailContext, AgentUiResponse, BulkReplySendRequest, ComposerWritingRequest, MailDraftUpdate, MailMutationRequest, MailSendRequest,
+  AgentAttachment, AgentUiResponse, BulkReplySendRequest, ComposerWritingRequest, MailDraftUpdate, MailMutationRequest, MailSendRequest,
   MailboxKey, MailLibraryKind, MailOrganizationMutationRequest, MailOrganizationTarget, MailSearchRequest, NewAgentSessionRequest, ScreenerDecisionRequest, SetAsideGroupMutationRequest,
 } from "../shared/contracts";
 import { helperAcceptsContextCount, helperById, isHelperId } from "../shared/helpers";
@@ -82,12 +82,7 @@ function bindProfile(): void {
   const directories = profiles.directories(profile.key);
   const env = { ...process.env, HEY_ACCOUNT_ID: profile.accountId, HEY_BASE_URL: profile.server, HEY_NONINTERACTIVE: "1", HEY_AGENT_ACCOUNT_ID: profile.accountId, HEY_AGENT_ACCOUNT_SERVER: profile.server, HEY_AGENT_WRITE_RECEIPTS: join(directories.state, "pending-writes") };
   accountContext = { scope: new HeyAccountScope(profile.accountId, profile.server), env };
-  const context = accountContext;
-  agent = new AgentSessionManager(directories.workspace, new ChatStore(join(directories.state, "chats.json")), (topicId): Promise<AgentMailContext> => profileRequest.run(context, async () => {
-    const thread = await readThread(topicId);
-    const contacts = [...new Map(thread.entries.map((entry) => [entry.sender.email ?? entry.sender.name, entry.sender])).values()];
-    return { topicId, subject: thread.subject, contacts, entries: thread.entries };
-  }), env, piExtensionPath, helperRoot);
+  agent = new AgentSessionManager(directories.workspace, new ChatStore(join(directories.state, "chats.json")), env, piExtensionPath, helperRoot);
   const profileAgent = agent;
   handoffs = new AgentHandoffs(profile, (tabId) => profileAgent.handoffSnapshot(tabId), env);
   agent.subscribe((workspace) => { if (profiles.state.token === token) mainWindow?.webContents.send("agent:changed", workspace); });

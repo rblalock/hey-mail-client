@@ -6,6 +6,7 @@ import type { AgentObjectLink, CalendarEvent, CalendarSearchItem, CalendarWindow
 import { addDays, addYears, calendarAllDaySpans, calendarEventKey, calendarPresentedWindow, calendarTimedClusters, calendarWindow, dateFromKey, dateKey, eventDayKey, eventOccursOn, filterCalendarEvents, type CalendarAllDaySpan, type CalendarTimedCluster, type CalendarViewMode } from "../calendar";
 import { appSound } from "../sound";
 import { isShortcutEvent } from "../../../shared/shortcut-binding";
+import { isEditingEvent, isLocalKeyboardEvent } from "../../../shared/keyboard-scope";
 import CalendarEventComposer from "./CalendarEventComposer";
 import { CalendarRecordingsPage, CalendarScheduleRecordings, type CalendarSection } from "./CalendarRecordings";
 import CalendarSearch from "./CalendarSearch";
@@ -290,10 +291,10 @@ export default function CalendarView({ onReturnMail, onNotice, target, onTargetM
       const repeatable = ["j", "k", "h", "l", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(event.key);
       if (event.defaultPrevented || !isShortcutEvent(event, repeatable) || composerDate || editingEvent || searchOpen) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("[data-helper-controls], [role='dialog'], [role='alertdialog']")) return;
+      if (isLocalKeyboardEvent(event) || target?.closest("[data-helper-controls]")) return;
       if (event.key === "Enter" && target?.closest("button, a")) return;
       if (target !== document.body && !panelRef.current?.contains(target)) return;
-      const editable = target?.matches("input, textarea, select, [contenteditable='true']");
+      const editable = isEditingEvent(event);
       if (editable) {
         if (event.key === "Escape") { event.preventDefault(); setQuery(""); setFilterOpen(false); searchRef.current?.blur(); }
         return;

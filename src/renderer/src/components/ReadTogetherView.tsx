@@ -4,6 +4,7 @@ import type { AgentObjectLink, ImboxPosting, MailThread } from "../../../shared/
 import { readerScrollIntent } from "../reader-scroll";
 import { appSound } from "../sound";
 import ThreadPanel from "./ThreadPanel";
+import { isEditingEvent, isLocalKeyboardEvent } from "../../../shared/keyboard-scope";
 
 export type ReadTogetherItem = {
   posting: ImboxPosting;
@@ -59,9 +60,8 @@ const ReadTogetherView = forwardRef<ReadTogetherHandle, ReadTogetherViewProps>(f
   }, [activeIndex, items.length]);
 
   const handleReaderKeyDown = useCallback((event: KeyboardEvent) => {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || isEditingEvent(event) || isLocalKeyboardEvent(event)) return;
     const target = event.target as { isContentEditable?: boolean; closest?: (selector: string) => Element | null } | null;
-    if (target?.isContentEditable || target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
     if (event.key === " " && target?.closest?.("button, a")) return;
     const container = scroll.current;
     if (!container) return;

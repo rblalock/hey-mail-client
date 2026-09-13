@@ -93,7 +93,7 @@ export default function MailComposer({ mode, posting, initialTo = "", onClose, o
 
   return (
     <div className="dialog-scrim composer-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !sending) onClose(); }}>
-      <section ref={dialogRef} tabIndex={-1} className="mail-composer-dialog" role="dialog" aria-modal="true" aria-label={mode === "compose" ? "New message" : `Forward ${posting?.subject ?? "message"}`} onKeyDown={handleKeys}>
+      <section ref={dialogRef} tabIndex={-1} className="mail-composer-dialog" data-keyboard-scope="editor" role="dialog" aria-modal="true" aria-label={mode === "compose" ? "New message" : `Forward ${posting?.subject ?? "message"}`} onKeyDown={handleKeys}>
         <header>
           <span><FileText size={15} /> {mode === "compose" ? "New message" : "Forward"}</span>
           <button type="button" className="icon-button" aria-label="Close composer" data-tooltip="Close composer" data-shortcut="Esc" data-tooltip-side="left" onClick={onClose} disabled={sending}><X size={15} /></button>

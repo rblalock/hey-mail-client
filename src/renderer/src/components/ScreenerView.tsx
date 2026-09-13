@@ -2,7 +2,7 @@ import { Check, CircleAlert, ExternalLink, Inbox, Newspaper, ReceiptText, Refres
 import { useCallback, useEffect, useRef, useState } from "react";
 import { confirmAction } from "./ConfirmAction";
 import { matchesBindingStep } from "../../../shared/shortcut-binding";
-import { isEditableTarget } from "../shortcuts";
+import { isEditingEvent, isLocalKeyboardEvent } from "../../../shared/keyboard-scope";
 import type { AgentObjectLink, MailThread, MailboxKey, ScreenerEntry, ScreenerResult } from "../../../shared/contracts";
 import { screenerPosting } from "../screener-posting";
 import { appSound } from "../sound";
@@ -48,7 +48,7 @@ export default function ScreenerView({ onNotice, onOpenObject }: ScreenerViewPro
   useEffect(() => {
     if (!selected) return;
     const keyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !matchesBindingStep(event, "escape") || isEditableTarget(event.target)) return;
+      if (event.defaultPrevented || !matchesBindingStep(event, "escape") || isEditingEvent(event) || isLocalKeyboardEvent(event)) return;
       if (!(event.target instanceof Element) || !event.target.closest(".thread-panel")) return;
       if (document.querySelector('[role="dialog"], [aria-modal="true"], [role="menu"]')) return;
       event.preventDefault();

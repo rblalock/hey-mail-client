@@ -1,4 +1,5 @@
 import { focusRecipient, useComposerKeyboard } from "../composer-keyboard";
+import { isEditingEvent, isLocalKeyboardEvent } from "../../../shared/keyboard-scope";
 import { useShortcutHints } from "../shortcut-context";
 import {
   ArrowLeft, ArrowUpCircle, Bell, BellOff, Check, ChevronDown, ChevronsUpDown, ChevronUp, Clock3, Eye, EyeOff, ExternalLink,
@@ -244,9 +245,9 @@ export default function ThreadPanel({
   };
 
   const handleReaderKeyDown = useCallback((event: KeyboardEvent) => {
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || isEditingEvent(event) || isLocalKeyboardEvent(event)) return;
     const target = event.target as { isContentEditable?: boolean; closest?: (selector: string) => Element | null } | null;
-    if (target?.isContentEditable || target?.closest?.("input, textarea, select, button, a, [contenteditable='true']")) return;
+    if (target?.closest?.("button, a")) return;
     const scroll = threadScroll.current;
     if (!scroll) return;
     const intent = readerScrollIntent(event.key, event.shiftKey, scroll.clientHeight, scroll.scrollHeight);
@@ -425,7 +426,7 @@ export default function ThreadPanel({
         </div>
       </div>
 
-      {mailActions && (replyExpanded ? <div ref={replyRoot} className="reply-composer thread-reply-composer is-expanded" onKeyDown={replyKeys}>
+      {mailActions && (replyExpanded ? <div ref={replyRoot} className="reply-composer thread-reply-composer is-expanded" data-keyboard-scope="editor" onKeyDown={replyKeys}>
         <div className="composer-label reply-composer-heading">
           <span><Reply size={14} /><strong>Reply</strong></span>
           <button type="button" className="icon-button" aria-label="Collapse reply" data-tooltip="Collapse reply" data-shortcut="Esc" data-tooltip-side="top" onClick={collapseReply} disabled={sending}><X size={14} /></button>

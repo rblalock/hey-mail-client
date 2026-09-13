@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type {
   AgentAttachment,
   AgentChatLink,
-  AgentMailContext,
   AgentModelProfile,
   AgentSnapshot,
   AgentTab,
@@ -28,7 +27,6 @@ export class AgentSessionManager {
   constructor(
     private readonly workingDirectory: string,
     private readonly store: ChatStore,
-    private readonly resolveContext: (topicId: string) => Promise<AgentMailContext>,
     private readonly env: NodeJS.ProcessEnv = process.env,
     private readonly extensionPath?: string,
     private readonly helperRoot?: string,
@@ -222,9 +220,7 @@ export class AgentSessionManager {
   async send(tabId: string, message: string): Promise<void> {
     await this.ensureInitialized();
     const session = this.session(tabId);
-    const attachments = session.peekSnapshot().attachments;
-    const contexts = Promise.all(attachments.filter((attachment) => attachment.kind === "hey-thread").map((attachment) => this.resolveContext(attachment.id)));
-    await session.send(message, contexts);
+    await session.send(message);
   }
 
   async abort(tabId: string): Promise<void> {

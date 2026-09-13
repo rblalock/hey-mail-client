@@ -7,7 +7,6 @@ import type {
   AgentActionApproval,
   AgentAppAction,
   AgentChatLink,
-  AgentMailContext,
   AgentMessage,
   AgentModel,
   AgentModelProfile,
@@ -276,7 +275,7 @@ export class PiRpcSession {
     return this.copySnapshot();
   }
 
-  async send(message: string, contexts: AgentMailContext[] | PromiseLike<AgentMailContext[]> = []): Promise<void> {
+  async send(message: string): Promise<void> {
     const trimmed = message.trim();
     if (!trimmed) throw new Error("Write a message for HEY Agent first.");
     if (this.currentRunId || this.snapshot.status === "running") throw new Error("This HEY Agent session is already working.");
@@ -294,13 +293,14 @@ export class PiRpcSession {
     this.snapshot.timeline.push({ kind: "message", id: this.nextItemId("message"), role: "user", text: trimmed, state: "complete" }, run);
     this.snapshot.status = this.child && !this.child.killed ? "running" : "starting";
     this.snapshot.error = undefined;
+    const attachments = structuredClone(this.snapshot.attachments);
     this.emit();
     try {
-      const [, resolvedContexts] = await Promise.all([this.ensureStarted(), Promise.resolve(contexts)]);
+      await this.ensureStarted();
       if (this.snapshot.title !== "New chat") void this.request({ type: "set_session_name", name: this.snapshot.title }).catch(() => undefined);
       this.snapshot.status = "running";
       this.emit();
-      await this.request({ type: "prompt", message: buildAgentPrompt(trimmed, resolvedContexts, this.snapshot.attachments) });
+      await this.request({ type: "prompt", message: buildAgentPrompt(trimmed, attachments) });
       await this.persist();
     } catch (error) {
       run.state = "error";

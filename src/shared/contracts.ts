@@ -842,13 +842,6 @@ export type AgentWorkspace = {
   archivedChats: AgentChatLink[];
 };
 
-export type AgentMailContext = {
-  topicId: string;
-  subject: string;
-  contacts: MailContact[];
-  entries: ThreadEntry[];
-};
-
 export type AgentUiResponse = {
   id: string;
   value?: string;

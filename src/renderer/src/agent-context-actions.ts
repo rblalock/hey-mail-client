@@ -24,6 +24,18 @@ export function unattachedMailContext(attachments: AgentThreadAttachment[], atta
   return attachments.filter((attachment) => !keys.has(`${attachment.kind}:${attachment.id}`));
 }
 
+export function mailContextAddState(attachments: AgentThreadAttachment[], attached: Array<{ kind: string; id: string }>) {
+  const unique = [...new Map(attachments.map((item) => [item.id, item])).values()];
+  const missing = unattachedMailContext(unique, attached);
+  const total = new Set([...attached, ...missing].map((item) => `${item.kind}:${item.id}`)).size;
+  const limitMessage = total > MAX_CONTEXTUAL_MAIL_ATTACHMENTS
+    ? `A chat can have up to ${MAX_CONTEXTUAL_MAIL_ATTACHMENTS} attachments. Remove some context or select fewer conversations.` : undefined;
+  const label = missing.length === 0 ? "Selection added"
+    : unique.length === 1 ? "Add email to chat"
+    : `Add ${missing.length}${missing.length < unique.length ? " remaining" : ""} ${missing.length === 1 ? "conversation" : "conversations"} to chat`;
+  return { missing, label, limitMessage };
+}
+
 export function contextualAgentCommands(count: number, hasActiveSession: boolean, allAttached: boolean): ShortcutDefinition[] {
   if (count < 1) return [];
   const plural = count > 1;

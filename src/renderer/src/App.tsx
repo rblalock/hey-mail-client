@@ -36,7 +36,8 @@ import { postingsForReadTogether, skippedReadTogetherCount } from "./read-togeth
 import TooltipLayer from "./components/TooltipLayer";
 import { ShortcutContext } from "./shortcut-context";
 import { isShortcutEvent, matchesBindingStep } from "../../shared/shortcut-binding";
-import { completesShortcutChord, DEFAULT_SETTINGS, isEditableTarget, matchesShortcut, resolveShortcuts, startsShortcutChord, type ShortcutDefinition, type ShortcutId } from "./shortcuts";
+import { completesShortcutChord, DEFAULT_SETTINGS, matchesShortcut, resolveShortcuts, startsShortcutChord, type ShortcutDefinition, type ShortcutId } from "./shortcuts";
+import { isDialogKeyboardEvent, isEditingEvent, isLocalKeyboardEvent, isNativeEditingShortcut } from "../../shared/keyboard-scope";
 import { appSound, installSoundUnlock } from "./sound";
 import { calendarTargetDate, eventDayKey } from "./calendar";
 import { helperCatalog, helperAcceptsContextCount, helperById, helperCommandId, helperCommandLabel, helperIdFromCommand, helperStarter, isCustomHelperId, type HelperId } from "../../shared/helpers";
@@ -987,6 +988,13 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isShortcutEvent(event, true)) return;
+      const editableTarget = isEditingEvent(event) || isLocalKeyboardEvent(event);
+      if (editableTarget && chord.current) {
+        clearTimeout(chord.current.timer); chord.current = undefined; setChordHint(undefined);
+      }
+      // Never cancel the browser's editing behavior or dispatch mailbox actions
+      // from an editor/dialog, including when focus is on its toolbar.
+      if (isDialogKeyboardEvent(event) || editableTarget && isNativeEditingShortcut(event)) return;
       if (event.repeat && !availableCommands.some((item) => matchesShortcut(event, item))) return;
       if (bulkComposerOpen || organizer) return;
       if (event.target instanceof Element && event.target.closest("[data-helper-controls]") && !(event.ctrlKey && event.key.toLowerCase() === "k")) return;
@@ -999,13 +1007,7 @@ export default function App() {
       }
       const activationTarget = event.target instanceof Element ? event.target.closest("button, a[href], summary") : null;
       if (activationTarget && (event.key === "Enter" || event.key === " ")) return;
-      const editableTarget = isEditableTarget(event.target);
       if (editableTarget) {
-        if (chord.current) {
-          clearTimeout(chord.current.timer);
-          chord.current = undefined;
-          setChordHint(undefined);
-        }
         if (!event.ctrlKey && !event.metaKey) return;
         const editableCommand = availableCommands.find((item) => matchesShortcut(event, item));
         if (!editableCommand || !["commands", "toggle-navigation", "toggle-agent", "focus-agent", "session-new", "session-close", "session-next", "session-previous"].includes(editableCommand.id)) return;
@@ -1229,7 +1231,7 @@ export default function App() {
             {!agentRailOpen ? <RailMorphButton rail="agent" open={false} className="agent-rail-reopen" aria-label="Show HEY Agent" data-tooltip="Show HEY Agent" data-shortcut={agentShortcut} data-tooltip-side="left" onClick={() => { appSound.play("snap", "interface"); setAgentRailOpen(true); }} /> : null}
           </div>
           {agentRailOpen ? <aside className="panel agent-rail" aria-label="HEY Agent">
-            {agentWorkspace ? <AgentPane workspace={agentWorkspace} onWorkspace={setAgentWorkspace} posting={selected} mailbox={readerOrigin ? undefined : activeMailbox} initialDraft={agentDraftSeed?.tabId === agentWorkspace.activeTabId ? agentDraftSeed.text : undefined} focusRequest={agentFocusRequest} onInitialDraftConsumed={consumeAgentDraftSeed} onUseInComposer={!readerOrigin && selected ? useAgentDraftInReply : undefined} onClose={() => { appSound.play("drop", "interface"); setAgentRailOpen(false); }} closeShortcut={agentShortcut} sound={settings.sound} onOpenObject={(object) => void openAgentObject(object)} />
+            {agentWorkspace ? <AgentPane workspace={agentWorkspace} onWorkspace={setAgentWorkspace} posting={selected} contextAttachments={agentContextAttachments} unavailableContextCount={agentContextPostings.filter((posting) => !posting.topicId).length} mailbox={readerOrigin ? undefined : activeMailbox} initialDraft={agentDraftSeed?.tabId === agentWorkspace.activeTabId ? agentDraftSeed.text : undefined} focusRequest={agentFocusRequest} onInitialDraftConsumed={consumeAgentDraftSeed} onUseInComposer={!readerOrigin && selected ? useAgentDraftInReply : undefined} onClose={() => { appSound.play("drop", "interface"); setAgentRailOpen(false); }} closeShortcut={agentShortcut} sound={settings.sound} onOpenObject={(object) => void openAgentObject(object)} />
               : <div className="agent-rail-loading"><Sparkles size={20} /><strong>Starting HEY Agent</strong><span>{agentError ?? "Restoring your local sessions…"}</span></div>}
           </aside> : null}
         </div>

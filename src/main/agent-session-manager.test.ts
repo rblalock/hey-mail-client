@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatStore } from "./chat-store";
 
 const getSnapshot = vi.hoisted(() => vi.fn());
+const send = vi.hoisted(() => vi.fn());
 const sessionOptions = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 
 vi.mock("./pi-rpc", () => ({
@@ -29,6 +30,7 @@ vi.mock("./pi-rpc", () => ({
 
     peekSnapshot() { return structuredClone(this.snapshot); }
     getSnapshot() { getSnapshot(); return Promise.resolve(this.peekSnapshot()); }
+    send(message: string) { send(message); return Promise.resolve(); }
     stop() {}
   },
 }));
@@ -36,13 +38,13 @@ vi.mock("./pi-rpc", () => ({
 import { AgentSessionManager } from "./agent-session-manager";
 
 describe("AgentSessionManager", () => {
-  beforeEach(() => { getSnapshot.mockClear(); sessionOptions.length = 0; });
+  beforeEach(() => { getSnapshot.mockClear(); send.mockClear(); sessionOptions.length = 0; });
 
   it("does not start Pi when a profile retires during asynchronous initialization", async () => {
     let resolve!: (value: unknown) => void;
     const load = new Promise((done) => { resolve = done; });
     const store = { load: () => load } as unknown as ChatStore;
-    const manager = new AgentSessionManager("/synthetic", store, async () => { throw new Error("unused"); });
+    const manager = new AgentSessionManager("/synthetic", store);
     const pending = manager.getWorkspace(); manager.stop();
     resolve({ version: 2, chats: [], openTabIds: [] });
     await expect(pending).rejects.toThrow("closed");
@@ -54,8 +56,8 @@ describe("AgentSessionManager", () => {
     try {
       const file = join(directory, "workspace.json");
       const store = new ChatStore(file);
-      const resolve = async () => { throw new Error("No mail context expected."); };
-      const manager = new AgentSessionManager(directory, store, resolve);
+
+      const manager = new AgentSessionManager(directory, store);
       const instructions = { title: "Project notes", instructions: "Recap decisions in two bullets." };
       const created = await manager.newSession({ helperId: "custom-project", name: "Project notes" }, { thinking: "low" }, instructions);
       instructions.instructions = "The definition was edited later.";
@@ -65,7 +67,7 @@ describe("AgentSessionManager", () => {
 
       sessionOptions.length = 0;
       // There is no Settings lookup or helperRoot on the resumed path. It still works after deletion.
-      const resumed = await new AgentSessionManager(directory, new ChatStore(file), resolve).getWorkspace();
+      const resumed = await new AgentSessionManager(directory, new ChatStore(file)).getWorkspace();
       expect(resumed.activeTabId).toBe(created.activeTabId);
       expect(resumed.activeSession.helperInstructions).toEqual(created.activeSession.helperInstructions);
       expect(sessionOptions.find((options) => options.id === created.activeTabId)).toMatchObject({ helperId: "custom-project", helperInstructions: created.activeSession.helperInstructions });
@@ -88,7 +90,7 @@ describe("AgentSessionManager", () => {
       });
       await store.saveWorkspace(["persisted-session"], "persisted-session");
 
-      const manager = new AgentSessionManager(directory, store, async () => { throw new Error("No mail context expected."); });
+      const manager = new AgentSessionManager(directory, store);
       const workspace = await manager.getWorkspace();
 
       expect(workspace.activeTabId).toBe("persisted-session");
@@ -102,7 +104,7 @@ describe("AgentSessionManager", () => {
     const directory = await mkdtemp(join(tmpdir(), "hey-agent-session-manager-"));
     try {
       const store = new ChatStore(join(directory, "workspace.json"));
-      const manager = new AgentSessionManager(directory, store, async () => { throw new Error("No mail context expected."); });
+      const manager = new AgentSessionManager(directory, store);
       const workspace = await manager.newSession({
         attachments: [
           { kind: "hey-thread", id: "101", title: "First", subtitle: "Maya" },
@@ -113,6 +115,9 @@ describe("AgentSessionManager", () => {
       expect(workspace.activeSession.title).toBe("2 conversations");
       expect(workspace.activeSession.attachments.map((attachment) => attachment.id)).toEqual(["101", "202"]);
       expect(workspace.tabs.find((tab) => tab.id === workspace.activeTabId)?.attachments.map((attachment) => attachment.id)).toEqual(["101", "202"]);
+      expect(send).not.toHaveBeenCalled();
+      await manager.send(workspace.activeTabId, "Review these conversations");
+      expect(send).toHaveBeenCalledExactlyOnceWith("Review these conversations");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -122,7 +127,7 @@ describe("AgentSessionManager", () => {
     const directory = await mkdtemp(join(tmpdir(), "hey-agent-session-manager-"));
     try {
       const store = new ChatStore(join(directory, "workspace.json"));
-      const manager = new AgentSessionManager(directory, store, async () => { throw new Error("No mail context expected."); });
+      const manager = new AgentSessionManager(directory, store);
       await manager.getWorkspace();
       sessionOptions.length = 0;
       await manager.newSession({}, { model: { provider: "openai", modelId: "gpt-fast" }, thinking: "low" });
@@ -139,7 +144,7 @@ describe("AgentSessionManager", () => {
     try {
       const store = new ChatStore(join(directory, "workspace.json"));
       const helperRoot = join(directory, "helpers");
-      const manager = new AgentSessionManager(directory, store, async () => { throw new Error("No mail context expected."); }, process.env, join(directory, "extension.mjs"), helperRoot);
+      const manager = new AgentSessionManager(directory, store, process.env, join(directory, "extension.mjs"), helperRoot);
       await manager.getWorkspace();
       sessionOptions.length = 0;
       const workspace = await manager.newSession({
