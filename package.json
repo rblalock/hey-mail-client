@@ -78,6 +78,10 @@
         "to": "hey-account-scope.mjs"
       },
       {
+        "from": "resources/hey-cli-flags.mjs",
+        "to": "hey-cli-flags.mjs"
+      },
+      {
         "from": "resources/hey-agent-pi-extension.mjs",
         "to": "hey-agent-pi-extension.mjs"
       },

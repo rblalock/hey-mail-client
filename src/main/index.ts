@@ -13,7 +13,7 @@ import { assertHandoffAction } from "../shared/handoff";
 import { ChatStore } from "./chat-store";
 import { createCalendarEvent, deleteCalendarEvent, isCalendarEventCreateRequest, isCalendarEventUpdateRequest, isCalendarWindowRequest, listCalendarWindow, updateCalendarEvent } from "./hey-calendar";
 import { isCalendarSearchRequest, searchCalendar } from "./hey-calendar-search";
-import { completeCalendarHabit, completeCalendarTodo, createCalendarTimeCategory, createCalendarTodo, currentCalendarTimeTrack, deleteCalendarHabit, deleteCalendarTimeCategory, deleteCalendarTimeTrack, deleteCalendarTodo, exportCalendarTimeTracks, isCalendarHabitCompletionRequest, isCalendarHabitWriteRequest, isCalendarJournalWriteRequest, isCalendarTimeStopRequest, isCalendarTimeTrackUpdateRequest, isCalendarTodoCompletionRequest, isCalendarTodoCreateRequest, listCalendarHabits, listCalendarJournal, listCalendarTimeCategories, listCalendarTimeTracks, listCalendarTodos, readCalendarJournal, renameCalendarTimeCategory, startCalendarTimeTrack, stopCalendarTimeTrack, updateCalendarTimeTrack, writeCalendarHabit, writeCalendarJournal } from "./hey-calendar-recordings";
+import { completeCalendarHabit, completeCalendarTodo, createCalendarTimeCategory, createCalendarTodo, currentCalendarTimeTrack, deleteCalendarHabit, deleteCalendarTimeCategory, deleteCalendarTimeTrack, deleteCalendarTodo, exportCalendarTimeTracks, isCalendarHabitCompletionRequest, isCalendarHabitWriteRequest, isCalendarJournalWriteRequest, isCalendarTimeCategoryTitle, isCalendarTimeStopRequest, isCalendarTimeTrackUpdateRequest, isCalendarTodoCompletionRequest, isCalendarTodoCreateRequest, listCalendarHabits, listCalendarJournal, listCalendarTimeCategories, listCalendarTimeTracks, listCalendarTodos, readCalendarJournal, renameCalendarTimeCategory, startCalendarTimeTrack, stopCalendarTimeTrack, updateCalendarTimeTrack, writeCalendarHabit, writeCalendarJournal } from "./hey-calendar-recordings";
 import { decideScreener, deleteDraft, editDraft, getMailOrganization, getMailOverview, getReplyContext, listContactThreads, listDrafts, listImbox, listLibrary, listMailbox, listScreener, listSearchFilters, mutateMail, previewBulkReply, readBundle, readLibrarySource, readThread, searchMail, sendBulkReply, sendDraft, sendMail, showContact, showDraft, unbundleContact, undoBulkReply, updateMailOrganization, updateSetAsideGroup } from "./hey";
 import { HeyWatcher } from "./hey-watch";
 import { resolveAppPaths } from "./paths";
@@ -340,8 +340,14 @@ function registerIpc(): void {
     return updateCalendarTimeTrack(request);
   });
   handle("calendar:time:delete", (_event, id) => deleteCalendarTimeTrack(assertNumericId(id, "time track")));
-  handle("calendar:time:category-create", (_event, title) => createCalendarTimeCategory(assertBoundedTitle(title, "time tracking category")));
-  handle("calendar:time:category-rename", (_event, id, title) => renameCalendarTimeCategory(assertNumericId(id, "time tracking category"), assertBoundedTitle(title, "time tracking category")));
+  handle("calendar:time:category-create", (_event, title) => {
+    if (!isCalendarTimeCategoryTitle(title)) throw new Error("Invalid HEY time tracking category.");
+    return createCalendarTimeCategory(title.trim());
+  });
+  handle("calendar:time:category-rename", (_event, id, title) => {
+    if (!isCalendarTimeCategoryTitle(title)) throw new Error("Invalid HEY time tracking category.");
+    return renameCalendarTimeCategory(assertNumericId(id, "time tracking category"), title.trim());
+  });
   handle("calendar:time:category-delete", (_event, id) => deleteCalendarTimeCategory(assertNumericId(id, "time tracking category")));
   handle("calendar:time:export", async () => {
     if (!mainWindow) return { cancelled: true };

@@ -15,7 +15,7 @@ import type {
   CalendarWindowRequest,
 } from "../shared/contracts";
 import { CALENDAR_HABIT_COLORS, CALENDAR_HABIT_ICONS } from "../shared/contracts";
-import { findExecutable, runFile } from "./process";
+import { findExecutable, runFile } from "./profile-process";
 import { spawn } from "node:child_process";
 
 type JsonRecord = Record<string, unknown>;
@@ -26,6 +26,8 @@ const numberList = (value: unknown): number[] => Array.isArray(value) ? value.fi
 const validDate = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
 const validId = (value: unknown): value is string => typeof value === "string" && /^\d+$/.test(value);
 const validTimestamp = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(value);
+const validFreeText = (value: unknown, maximum: number, allowEmpty = false): value is string =>
+  typeof value === "string" && value.length <= maximum && (allowEmpty || value.trim().length > 0) && !value.trim().startsWith("-");
 
 function parseEnvelope(stdout: string): unknown {
   const payload: unknown = JSON.parse(stdout);
@@ -348,14 +350,14 @@ export async function exportCalendarTimeTracks(path: string, env: NodeJS.Process
 
 export function isCalendarTodoCreateRequest(value: unknown): value is CalendarTodoCreateRequest {
   const request = record(value);
-  return typeof request.title === "string" && request.title.trim().length > 0 && request.title.length <= 300 && (request.date === undefined || validDate(request.date));
+  return validFreeText(request.title, 300) && (request.date === undefined || validDate(request.date));
 }
 export function isCalendarTodoCompletionRequest(value: unknown): value is CalendarTodoCompletionRequest {
   const request = record(value); return validId(request.id) && typeof request.completed === "boolean";
 }
 export function isCalendarHabitWriteRequest(value: unknown): value is CalendarHabitWriteRequest {
   const request = record(value);
-  return (request.id === undefined || validId(request.id)) && typeof request.name === "string" && request.name.trim().length > 0 && request.name.length <= 200
+  return (request.id === undefined || validId(request.id)) && validFreeText(request.name, 200)
     && CALENDAR_HABIT_ICONS.includes(request.icon as CalendarHabit["icon"]) && CALENDAR_HABIT_COLORS.includes(request.color as CalendarHabit["color"])
     && Array.isArray(request.days) && request.days.length > 0 && request.days.length <= 7 && new Set(request.days).size === request.days.length && numberList(request.days).length === request.days.length;
 }
@@ -363,15 +365,19 @@ export function isCalendarHabitCompletionRequest(value: unknown): value is Calen
   const request = record(value); return validId(request.id) && validDate(request.date) && typeof request.completed === "boolean";
 }
 export function isCalendarJournalWriteRequest(value: unknown): value is CalendarJournalWriteRequest {
-  const request = record(value); return validDate(request.date) && typeof request.content === "string" && request.content.length <= 100_000;
+  const request = record(value); return validDate(request.date) && validFreeText(request.content, 100_000, true);
 }
 export function isCalendarTimeStopRequest(value: unknown): value is CalendarTimeStopRequest {
-  const request = record(value); return request.category === undefined || typeof request.category === "string" && request.category.trim().length > 0 && request.category.length <= 200;
+  const request = record(value); return request.category === undefined || validFreeText(request.category, 200);
 }
 export function isCalendarTimeTrackUpdateRequest(value: unknown): value is CalendarTimeTrackUpdateRequest {
   const request = record(value);
   const hasChange = ["start", "end", "category", "notes"].some((key) => Object.hasOwn(request, key));
   return validId(request.id) && hasChange && (request.start === undefined || validTimestamp(request.start)) && (request.end === undefined || validTimestamp(request.end))
-    && (request.category === undefined || typeof request.category === "string" && request.category.trim().length > 0 && request.category.length <= 200)
-    && (request.notes === undefined || typeof request.notes === "string" && request.notes.trim().length > 0 && request.notes.length <= 10_000);
+    && (request.category === undefined || validFreeText(request.category, 200))
+    && (request.notes === undefined || validFreeText(request.notes, 10_000));
+}
+
+export function isCalendarTimeCategoryTitle(value: unknown): value is string {
+  return validFreeText(value, 200);
 }

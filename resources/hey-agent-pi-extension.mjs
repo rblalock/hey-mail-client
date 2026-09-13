@@ -1,4 +1,5 @@
 import { HeyAccountScope } from "./hey-account-scope.mjs";
+import { BOOLEAN_FLAGS, VALUE_FLAGS } from "./hey-cli-flags.mjs";
 import { beginHeyWrite, completeHeyWrite } from "./hey-write-receipts.mjs";
 const APPROVAL_MARKER = "__HEY_AGENT_APPROVAL_V1__";
 const RESULT_VERSION = 1;
@@ -75,10 +76,12 @@ function commandKey(args) {
 }
 
 function hasFlag(args, flag) {
-  const switches = new Set(["--help", "-h", "--draft", "--all", "--json", "--quiet", "--ids-only", "--count", "--now", "--tomorrow", "--weekend", "--next-week", "--seen", "--spam", "--force", "--html", "--stats", "--styled", "--markdown", "-v", "--verbose"]);
   for (let index = 0; index < args.length; index++) {
     if (args[index] === flag) return true;
-    if (args[index].startsWith("-") && !switches.has(args[index]) && !args[index].includes("=")) index++;
+    if (args[index].startsWith("-")) {
+      if (BOOLEAN_FLAGS.has(args[index])) continue;
+      if (VALUE_FLAGS.has(args[index])) index++;
+    }
   }
   return false;
 }
@@ -100,7 +103,8 @@ function positionalIds(args, start = 1) {
   for (let index = start; index < args.length; index += 1) {
     const value = args[index];
     if (value?.startsWith("-")) {
-      if (!["--all", "--json", "--quiet", "--ids-only", "--count", "--now", "--tomorrow", "--weekend", "--next-week", "--seen", "--spam"].includes(value)) index += 1;
+      if (BOOLEAN_FLAGS.has(value)) continue;
+      if (VALUE_FLAGS.has(value)) index += 1;
       continue;
     }
     if (/^\d+$/.test(value ?? "")) ids.push(value);

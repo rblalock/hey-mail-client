@@ -1,5 +1,5 @@
 import type { CalendarEvent, CalendarEventCreateRequest, CalendarEventCreateResult, CalendarEventMutationResult, CalendarEventUpdateRequest, CalendarSummary, CalendarWindowRequest, CalendarWindowResult } from "../shared/contracts";
-import { findExecutable, runFile } from "./process";
+import { findExecutable, runFile } from "./profile-process";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -200,7 +200,7 @@ export function isCalendarEventCreateRequest(value: unknown): value is CalendarE
   const text = [request.location, request.notes, request.timeZone];
   const emails = request.invites ?? [];
   const reminders = request.reminders ?? [];
-  if (typeof request.title !== "string" || !request.title.trim() || request.title.length > 300) return false;
+  if (typeof request.title !== "string" || !request.title.trim() || request.title.trim().startsWith("-") || request.title.length > 300) return false;
   if (typeof request.calendarId !== "string" || !/^\d+$/.test(request.calendarId)) return false;
   if (!validDate(request.startsOn) || request.endsOn !== undefined && !validDate(request.endsOn)) return false;
   if (request.endsOn && request.endsOn < request.startsOn) return false;
@@ -224,7 +224,7 @@ export function isCalendarEventUpdateRequest(value: unknown): value is CalendarE
   if (typeof request.id !== "string" || !/^\d+$/.test(request.id) || !validDate(request.lookupDate)) return false;
   const changeKeys: Array<keyof CalendarEventUpdateRequest> = ["title", "startsOn", "endsOn", "allDay", "startTime", "endTime", "timeZone", "location", "link", "notes", "invites", "reminders", "repeat", "repeatUntil", "countdown", "countdownUnit", "circle"];
   if (!changeKeys.some((key) => Object.hasOwn(request, key))) return false;
-  if (request.title !== undefined && (typeof request.title !== "string" || !request.title.trim() || request.title.length > 300)) return false;
+  if (request.title !== undefined && (typeof request.title !== "string" || !request.title.trim() || request.title.trim().startsWith("-") || request.title.length > 300)) return false;
   if (request.startsOn !== undefined && !validDate(request.startsOn) || request.endsOn !== undefined && !validDate(request.endsOn)) return false;
   if (request.startsOn && request.endsOn && request.endsOn < request.startsOn) return false;
   if (request.allDay !== undefined && typeof request.allDay !== "boolean") return false;

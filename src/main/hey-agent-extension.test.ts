@@ -54,6 +54,10 @@ describe("HEY Agent Pi extension", () => {
     expect(extension.classifyHeyArgs(["config", "trusted-locals", "add", "/tmp/example"])).toBe("restricted");
     expect(extension.classifyHeyArgs(["upgrade"])).toBe("restricted");
   });
+  it("keeps interleaved boolean flags from hiding positional IDs", () => {
+    const ids = Array.from({ length: 26 }, (_, index) => String(index + 1));
+    expect(extension.classifyHeyArgs(["label", "add", "-v", ...ids])).toBe("broad");
+  });
 
   it("builds a human-readable event approval from structured argv", () => {
     const approval = extension.approvalForHeyArgs(["event", "add", "Planning", "--starts-on", "2026-09-03", "--start-time", "14:00", "--invite", "person@example.com"]);
