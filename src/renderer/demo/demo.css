@@ -1,0 +1,51 @@
+/* Loaded only by the demo-mode dev server. Never imported by the app. */
+@font-face {
+  font-family: "Demo Flow";
+  src: url("./FlowRounded-Regular.ttf") format("truetype");
+  font-display: block;
+}
+
+/* Keep the app's sizes, colors, spacing, controls, and avatars intact. */
+:is(
+  .subject-line > strong,
+  .summary-line,
+  .reply-later-copy > strong,
+  .message-heading h1,
+  .entry-preview,
+  .entry-sender-contact small,
+  .entry-recipient-details li,
+  .mail-search-results > button > strong,
+  .mail-search-results > button > p,
+  .thread-listing-row > span > strong,
+  .thread-listing-row > span > small,
+  .account-copy small,
+  .composer-account,
+  .composer-fields > label > input,
+  .forward-context strong,
+  .recipient-chip > span,
+  .recipient-control > input,
+  .recipient-suggestions small,
+  .library-contact-row small,
+  .contact-identity p,
+  .calendar-event-copy strong,
+  .calendar-event-copy small,
+  .calendar-detail-scroll h1,
+  .calendar-notes p,
+  .calendar-title-field input,
+  .calendar-field textarea,
+  .calendar-search-copy strong,
+  .calendar-search-copy small,
+  .agent-tab > span:last-child,
+  .recent-chat > span,
+  .agent-context-chip:not(.is-local-file) > span
+) {
+  font-family: "Demo Flow" !important;
+}
+
+/* Inputs stay usable; their hints don't contain personal data. */
+.composer-fields input::placeholder,
+.recipient-control input::placeholder,
+.calendar-title-field input::placeholder,
+.calendar-field textarea::placeholder {
+  font-family: var(--app-font);
+}

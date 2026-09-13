@@ -10,6 +10,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:demo": "electron-vite dev --mode demo",
     "start": "electron-vite preview",
     "postinstall": "install-electron",
     "build": "npm run typecheck && electron-vite build",
