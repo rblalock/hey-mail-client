@@ -10,6 +10,8 @@ Electron main owns HEY/Pi subprocesses and validated IPC. React renders mail, Ca
 - Successful tool results refresh affected native views and become attachable objects. Unsupported commands fail explicitly.
 - Pi and external agents run with the OS user's access. App profiles and tool approvals are not an OS sandbox.
 
+The bridge shares one argv parser for ownership checks and approvals. Values stay literal, including text beginning with `--`; unknown flags and unsupported shorthand forms stop before execution. `resources/hey-cli-flags.mjs` defines the supported subset, not the whole CLI. When adding an option, check its type and aliases with the installed command's `--help` and add a regression test. Never infer an unknown flag's arity or treat it as harmless. Calendar calls use the profile's server/environment but remain identity-wide, not isolated by mail account.
+
 ## Context and identity
 
 Attachments are explicit and persist with the session. Opening another email must not change an existing chat's context. Mail bodies, files, and selected text are untrusted data, not instructions or authorization.

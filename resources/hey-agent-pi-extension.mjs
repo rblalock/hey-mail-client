@@ -1,5 +1,5 @@
 import { HeyAccountScope } from "./hey-account-scope.mjs";
-import { BOOLEAN_FLAGS, VALUE_FLAGS } from "./hey-cli-flags.mjs";
+import { parseHeyArgs } from "./hey-cli-flags.mjs";
 import { beginHeyWrite, completeHeyWrite } from "./hey-write-receipts.mjs";
 const APPROVAL_MARKER = "__HEY_AGENT_APPROVAL_V1__";
 const RESULT_VERSION = 1;
@@ -68,6 +68,7 @@ const DESTRUCTIVE = new Set([
 ]);
 
 function commandKey(args) {
+  args = parseHeyArgs(args).positionals;
   const root = args[0] ?? "";
   if (["compose", "doctor", "forward", "ignore", "move", "reply", "search", "seen", "share", "spam", "stop-ignoring", "trash", "unseen", "unshare"].includes(root)) return `${root}:`;
   if (root === "contact" && args[1] === "note") return `contact:note:${args[2] ?? ""}`;
@@ -76,40 +77,19 @@ function commandKey(args) {
 }
 
 function hasFlag(args, flag) {
-  for (let index = 0; index < args.length; index++) {
-    if (args[index] === flag) return true;
-    if (args[index].startsWith("-")) {
-      if (BOOLEAN_FLAGS.has(args[index])) continue;
-      if (VALUE_FLAGS.has(args[index])) index++;
-    }
-  }
-  return false;
+  return parseHeyArgs(args).has(flag);
 }
 
 function flagValues(args, flag) {
-  const values = [];
-  for (let index = 0; index < args.length - 1; index += 1) {
-    if (args[index] === flag) values.push(args[index + 1]);
-  }
-  return values.filter((value) => typeof value === "string");
+  return parseHeyArgs(args).values(flag);
 }
 
 function flagValue(args, flag) {
-  return flagValues(args, flag)[0];
+  return flagValues(args, flag).at(-1);
 }
 
 function positionalIds(args, start = 1) {
-  const ids = [];
-  for (let index = start; index < args.length; index += 1) {
-    const value = args[index];
-    if (value?.startsWith("-")) {
-      if (BOOLEAN_FLAGS.has(value)) continue;
-      if (VALUE_FLAGS.has(value)) index += 1;
-      continue;
-    }
-    if (/^\d+$/.test(value ?? "")) ids.push(value);
-  }
-  return ids;
+  return parseHeyArgs(args).positionals.slice(start).filter((value) => /^\d+$/.test(value));
 }
 
 export function validateHeyArgs(value) {
@@ -122,15 +102,16 @@ export function validateHeyArgs(value) {
     total += argument.length;
     return argument;
   });
-  if (args.includes("--base-url")) throw new Error("HEY base URL overrides are not available inside the embedded agent.");
+  if (parseHeyArgs(args).has("--base-url")) throw new Error("HEY base URL overrides are not available inside the embedded agent.");
   if (total > 500_000) throw new Error("The HEY command is too large.");
   return args;
 }
 
 export function classifyHeyArgs(args) {
   const key = commandKey(args);
-  const root = args[0] ?? "";
-  const second = args[1] ?? "";
+  const positional = parseHeyArgs(args).positionals;
+  const root = positional[0] ?? "";
+  const second = positional[1] ?? "";
   if (root === "login" || root === "logout" || root === "setup" || root === "skill" || root === "completion" || root === "shell-completion" || root === "tui" || root === "upgrade" || root === "watch" || root === "mcp") return "restricted";
   if (root === "auth" && second !== "status") return "restricted";
   if (root === "config") return "restricted";
@@ -138,8 +119,8 @@ export function classifyHeyArgs(args) {
   if ((root === "compose" || root === "reply") && hasFlag(args, "--draft")) return "reversible";
   if (root === "compose") return "external";
   if (root === "timetrack" && second === "export" && !hasFlag(args, "--output") && !hasFlag(args, "-o")) return "read";
-  if (root === "journal" && second === "write" && flagValue(args, "--content") === "") return "destructive";
-  if (root === "timetrack" && (second === "delete" || second === "category" && args[2] === "delete")) return "destructive";
+  if (root === "journal" && second === "write" && (flagValue(args, "--content") === "" || flagValue(args, "--content-html") === "" || positional.at(-1) === "")) return "destructive";
+  if (root === "timetrack" && (second === "delete" || second === "category" && positional[2] === "delete")) return "destructive";
   if (READ_ONLY.has(key)) return "read";
   if (DESTRUCTIVE.has(key)) return "destructive";
   if (EXTERNAL.has(key)) return "external";
@@ -152,19 +133,11 @@ export function classifyHeyArgs(args) {
 }
 
 function displayArguments(args) {
-  const redactNext = new Set(["--cookie", "--token", "--api-key"]);
-  const rendered = [];
-  let redact = false;
-  for (const argument of args) {
-    if (redact) {
-      rendered.push("[redacted]");
-      redact = false;
-      continue;
-    }
-    rendered.push(argument.includes(" ") || argument.includes("\n") ? JSON.stringify(argument.length > 240 ? `${argument.slice(0, 237)}…` : argument) : argument);
-    if (redactNext.has(argument)) redact = true;
+  const safe = [...args];
+  for (const option of parseHeyArgs(args).options) {
+    if (["--cookie", "--token", "--api-key"].includes(option.name)) safe[option.valueIndex] = option.inline ? `${option.name}=[redacted]` : "[redacted]";
   }
-  return rendered;
+  return safe.map((argument) => argument.includes(" ") || argument.includes("\n") ? JSON.stringify(argument.length > 240 ? `${argument.slice(0, 237)}…` : argument) : argument);
 }
 
 function displayCommand(args) {
@@ -172,33 +145,35 @@ function displayCommand(args) {
 }
 
 function editableMessageArgument(args) {
-  const root = args[0] ?? "";
-  const action = args[1] ?? "";
+  const parsed = parseHeyArgs(args);
+  const [root, action] = parsed.positionals;
   const supportsMessage = root === "compose" || root === "reply" || root === "forward" || root === "bulk-reply" && action === "send";
   if (!supportsMessage) return undefined;
-  const flagIndex = args.findIndex((argument) => ["-m", "--message", "--message-html", "--content"].includes(argument));
-  const argumentIndex = flagIndex >= 0 && flagIndex < args.length - 1 ? flagIndex + 1 : -1;
-  if (argumentIndex < 0) return undefined;
+  const option = parsed.options.findLast((option) => ["--message", "--message-html"].includes(option.name));
+  if (!option) return undefined;
+  const argumentIndex = option.valueIndex;
   const rendered = displayArguments(args);
   const before = rendered.slice(0, argumentIndex).join(" ");
   const after = rendered.slice(argumentIndex + 1).join(" ");
   return {
     argumentIndex,
-    label: args[flagIndex] === "--message-html" ? "Message HTML" : "Message",
-    value: args[argumentIndex],
-    commandPrefix: `hey${before ? ` ${before}` : ""} `,
+    label: option.name === "--message-html" ? "Message HTML" : "Message",
+    value: option.value,
+    valuePrefix: option.inline ? `${args[option.optionIndex].split("=")[0]}=` : "",
+    commandPrefix: `hey${before ? ` ${before}` : ""} ${option.inline ? `${option.name}=` : ""}`,
     commandSuffix: after ? ` ${after}` : "",
     required: true,
   };
 }
 
 function approvalFields(args) {
-  const root = args[0] ?? "HEY";
-  const action = args[1] ?? "command";
+  const positional = parseHeyArgs(args).positionals;
+  const root = positional[0] ?? "HEY";
+  const action = positional[1] ?? "command";
   const fields = [{ label: "Operation", value: `${root} ${action}`.trim() }];
   if (root === "event") {
-    if (action === "edit" && args[2]) fields.push({ label: "Event", value: args[2] });
-    if (action === "add" && args[2]) fields.push({ label: "Title", value: args[2] });
+    if (action === "edit" && positional[2]) fields.push({ label: "Event", value: positional[2] });
+    if (action === "add" && positional[2] && !flagValue(args, "--title")) fields.push({ label: "Title", value: positional[2] });
     const editedTitle = flagValue(args, "--title") ?? flagValue(args, "-t");
     if (editedTitle) fields.push({ label: "Title", value: editedTitle });
     const date = flagValue(args, "--starts-on");
@@ -214,30 +189,30 @@ function approvalFields(args) {
     const repeat = flagValue(args, "--repeat");
     if (repeat) fields.push({ label: "Repeats", value: repeat.replaceAll("_", " ") });
   } else if (root === "todo") {
-    if (action === "add" && args[2]) fields.push({ label: "Todo", value: args[2] });
+    if (action === "add") fields.push({ label: "Todo", value: flagValue(args, "--title") ?? positional[2] ?? "" });
     if (flagValue(args, "--date")) fields.push({ label: "Week of", value: flagValue(args, "--date") });
-    if (["complete", "uncomplete", "delete"].includes(action) && args[2]) fields.push({ label: "Todo", value: args[2] });
+    if (["complete", "uncomplete", "delete"].includes(action) && positional[2]) fields.push({ label: "Todo", value: positional[2] });
   } else if (root === "habit") {
     const name = flagValue(args, "--name");
     if (name) fields.push({ label: "Habit", value: name });
     if (flagValue(args, "--days")) fields.push({ label: "Days", value: flagValue(args, "--days") });
     if (flagValue(args, "--date")) fields.push({ label: "Date", value: flagValue(args, "--date") });
-    if (["edit", "complete", "uncomplete", "delete"].includes(action) && args[2]) fields.push({ label: "Habit", value: args[2] });
+    if (["edit", "complete", "uncomplete", "delete"].includes(action) && positional[2]) fields.push({ label: "Habit", value: positional[2] });
   } else if (root === "journal") {
-    if (args[2]) fields.push({ label: "Date", value: args[2] });
-    const content = flagValue(args, "--content");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(positional[2] ?? "")) fields.push({ label: "Date", value: positional[2] });
+    const content = flagValue(args, "--content") ?? flagValue(args, "--content-html");
     if (content !== undefined) fields.push({ label: "Entry", value: content || "Remove this entry" });
   } else if (root === "timetrack") {
-    if (["edit", "delete"].includes(action) && args[2]) fields.push({ label: "Time track", value: args[2] });
-    if (action === "category" && args[2]) fields[0] = { label: "Operation", value: `timetrack category ${args[2]}` };
+    if (["edit", "delete"].includes(action) && positional[2]) fields.push({ label: "Time track", value: positional[2] });
+    if (action === "category" && positional[2]) fields[0] = { label: "Operation", value: `timetrack category ${positional[2]}` };
     const start = flagValue(args, "--start");
     const end = flagValue(args, "--end");
     if (start || end) fields.push({ label: "Time", value: [start, end].filter(Boolean).join(" – ") });
     if (flagValue(args, "--category")) fields.push({ label: "Category", value: flagValue(args, "--category") });
     if (flagValue(args, "--notes")) fields.push({ label: "Notes", value: flagValue(args, "--notes") });
   } else if (["compose", "reply", "forward", "bulk-reply"].includes(root) || root === "draft" && action === "send") {
-    if (["reply", "forward"].includes(root) && args[1]) fields.push({ label: "Thread", value: args[1] });
-    if (root === "draft" && args[2]) fields.push({ label: "Draft", value: args[2] });
+    if (["reply", "forward"].includes(root) && positional[1]) fields.push({ label: "Thread", value: positional[1] });
+    if (root === "draft" && positional[2]) fields.push({ label: "Draft", value: positional[2] });
     if (root === "bulk-reply") {
       const count = positionalIds(args, 2).length;
       if (count) fields.push({ label: "Conversations", value: String(count) });
@@ -247,14 +222,14 @@ function approvalFields(args) {
     const subject = flagValue(args, "--subject");
     if (subject) fields.push({ label: "Subject", value: subject });
   } else if (root === "collection" || root === "label") {
-    const target = flagValue(args, "--to") ?? flagValue(args, "--from") ?? args[2];
+    const target = flagValue(args, "--to") ?? flagValue(args, "--from") ?? positional[2];
     if (target) fields.push({ label: root === "collection" ? "Collection" : "Label", value: target });
     const count = positionalIds(args, 2).length;
     if (count) fields.push({ label: "Conversations", value: String(count) });
   } else if (root === "set-aside" && action === "group") {
-    const groupAction = args[2] ?? "";
+    const groupAction = positional[2] ?? "";
     fields[0] = { label: "Operation", value: `set-aside group ${groupAction}` };
-    const group = flagValue(args, "--to") ?? (["view", "delete"].includes(groupAction) ? args[3] : undefined);
+    const group = flagValue(args, "--to") ?? (["view", "delete"].includes(groupAction) ? positional[3] : undefined);
     if (group) fields.push({ label: "Group", value: group });
     const count = positionalIds(args, 3).length;
     if (!["view", "delete", "list"].includes(groupAction) && count) fields.push({ label: "Conversations", value: String(count) });
@@ -267,7 +242,7 @@ function approvalFields(args) {
 
 export function approvalForHeyArgs(args, reason = "") {
   const impact = classifyHeyArgs(args);
-  const command = `${args[0] ?? "HEY"} ${args[1] ?? ""}`.trim();
+  const command = parseHeyArgs(args).positionals.slice(0, 2).join(" ");
   const editable = editableMessageArgument(args);
   return {
     version: RESULT_VERSION,
@@ -312,8 +287,9 @@ function encoded(value) {
 }
 
 export function resultObjects(args, payload) {
-  const root = args[0] ?? "";
-  const action = args[1] ?? "";
+  const positional = parseHeyArgs(args).positionals;
+  const root = positional[0] ?? "";
+  const action = positional[1] ?? "";
   const envelope = objectValue(payload);
   const rawData = envelope.data ?? payload;
   const data = dataFrom(payload);
@@ -334,9 +310,9 @@ export function resultObjects(args, payload) {
       if (id) result.push({ kind: "calendar-event", id, title: idFrom(row.title, "Calendar event"), subtitle: date || undefined, deepLink: `hey-agent://calendar/events/${encoded(id)}${date ? `?date=${encoded(date)}` : ""}` });
     }
   } else if (root === "event" && ["add", "edit"].includes(action)) {
-    const id = idFrom(data.id, data.event_id, nested.id, action === "edit" ? args[2] : "");
+    const id = idFrom(data.id, data.event_id, nested.id, action === "edit" ? positional[2] : "");
     if (id) {
-      const title = idFrom(data.title, nested.title, action === "add" ? args[2] : "Calendar event");
+      const title = idFrom(data.title, nested.title, action === "add" ? flagValue(args, "--title") ?? positional[2] : "Calendar event");
       const date = idFrom(data.starts_on, data.starts_at, nested.starts_on, nested.starts_at, flagValue(args, "--starts-on")).slice(0, 10);
       result.push({ kind: "calendar-event", id, title: title || "Calendar event", subtitle: date || undefined, deepLink: `hey-agent://calendar/events/${encoded(id)}${date ? `?date=${encoded(date)}` : ""}` });
     }
@@ -347,16 +323,16 @@ export function resultObjects(args, payload) {
       if (id) result.push({ kind: "calendar-todo", id, title: idFrom(row.title, "Sometime This Week"), subtitle: date || undefined, deepLink: `hey-agent://calendar/todos/${encoded(id)}${date ? `?date=${encoded(date)}` : ""}` });
     }
   } else if (root === "todo" && ["add", "complete", "uncomplete"].includes(action)) {
-    const id = idFrom(data.id, data.todo_id, nested.id, action !== "add" ? args[2] : "");
+    const id = idFrom(data.id, data.todo_id, nested.id, action !== "add" ? positional[2] : "");
     const date = idFrom(data.starts_on, data.date, nested.starts_on, nested.date, flagValue(args, "--date")).slice(0, 10);
-    if (id) result.push({ kind: "calendar-todo", id, title: idFrom(data.title, nested.title, action === "add" ? args[2] : "Sometime This Week"), subtitle: date || undefined, deepLink: `hey-agent://calendar/todos/${encoded(id)}${date ? `?date=${encoded(date)}` : ""}` });
+    if (id) result.push({ kind: "calendar-todo", id, title: idFrom(data.title, nested.title, action === "add" ? flagValue(args, "--title") ?? positional[2] : "Sometime This Week"), subtitle: date || undefined, deepLink: `hey-agent://calendar/todos/${encoded(id)}${date ? `?date=${encoded(date)}` : ""}` });
   } else if (root === "habit" && action === "list") {
     for (const row of rows) {
       const id = idFrom(row.id);
       if (id) result.push({ kind: "calendar-habit", id, title: idFrom(row.title, row.name, "Habit"), deepLink: `hey-agent://calendar/habits/${encoded(id)}` });
     }
   } else if (root === "habit" && ["create", "add", "edit", "complete", "uncomplete"].includes(action)) {
-    const id = idFrom(data.id, data.habit_id, nested.id, ["edit", "complete", "uncomplete"].includes(action) ? args[2] : "");
+    const id = idFrom(data.id, data.habit_id, nested.id, ["edit", "complete", "uncomplete"].includes(action) ? positional[2] : "");
     if (id) result.push({ kind: "calendar-habit", id, title: idFrom(data.title, data.name, nested.title, nested.name, flagValue(args, "--name"), "Habit"), deepLink: `hey-agent://calendar/habits/${encoded(id)}` });
   } else if (root === "journal" && action === "list") {
     for (const row of rows) {
@@ -364,7 +340,7 @@ export function resultObjects(args, payload) {
       if (date) result.push({ kind: "calendar-journal", id: date, title: "Journal entry", subtitle: date, deepLink: `hey-agent://calendar/journal/${encoded(date)}?date=${encoded(date)}` });
     }
   } else if (root === "journal" && ["read", "write"].includes(action) && !(action === "write" && flagValue(args, "--content") === "")) {
-    const date = idFrom(data.date, nested.date, args[2]).slice(0, 10);
+    const date = idFrom(data.date, nested.date, positional[2]).slice(0, 10);
     if (date) result.push({ kind: "calendar-journal", id: date, title: "Journal entry", subtitle: date, deepLink: `hey-agent://calendar/journal/${encoded(date)}?date=${encoded(date)}` });
   } else if (root === "timetrack" && action === "list") {
     for (const row of rows) {
@@ -373,17 +349,17 @@ export function resultObjects(args, payload) {
       if (id) result.push({ kind: "calendar-time-track", id, title: idFrom(row.category, row.notes, "Tracked time"), subtitle: date || undefined, deepLink: `hey-agent://calendar/time/${encoded(id)}${date ? `?date=${encoded(date)}` : ""}` });
     }
   } else if (root === "timetrack" && ["current", "start", "stop", "edit"].includes(action)) {
-    const id = idFrom(data.id, data.time_track_id, nested.id, action === "edit" ? args[2] : "");
+    const id = idFrom(data.id, data.time_track_id, nested.id, action === "edit" ? positional[2] : "");
     const date = idFrom(data.starts_at, nested.starts_at, flagValue(args, "--start")).slice(0, 10);
     if (id) result.push({ kind: "calendar-time-track", id, title: idFrom(data.category, data.notes, nested.category, nested.notes, "Tracked time"), subtitle: date || undefined, deepLink: `hey-agent://calendar/time/${encoded(id)}${date ? `?date=${encoded(date)}` : ""}` });
   } else if (((root === "compose" || root === "reply") && hasFlag(args, "--draft")) || (root === "draft" && ["show", "edit"].includes(action))) {
-    const id = idFrom(data.id, data.draft_id, nested.id, root === "draft" ? args[2] : "");
+    const id = idFrom(data.id, data.draft_id, nested.id, root === "draft" ? positional[2] : "");
     if (id) result.push({ kind: "draft", id, title: idFrom(data.subject, nested.subject, flagValue(args, "--subject"), "Draft"), deepLink: `hey-agent://mail/drafts/${encoded(id)}` });
   } else if ((root === "thread" && action === "read") || root === "reply" || root === "forward") {
-    const id = idFrom(data.topic_id, nested.topic_id, root === "thread" ? args[2] : args[1]);
+    const id = idFrom(data.topic_id, nested.topic_id, root === "thread" ? positional[2] : positional[1]);
     if (id) result.push({ kind: "mail-thread", id, title: idFrom(data.subject, nested.subject, "Email conversation"), deepLink: `hey-agent://mail/threads/${encoded(id)}` });
   } else if (root === "bundle" && action === "view") {
-    const id = idFrom(data.id, args[2]);
+    const id = idFrom(data.id, positional[2]);
     const contact = objectValue(data.contact);
     if (id) result.push({ kind: "mail-bundle", id, title: `${idFrom(contact.name, "Contact")} bundle`, subtitle: "Unseen conversations", deepLink: `hey-agent://mail/bundles/${encoded(id)}` });
     const contactId = idFrom(contact.id);
@@ -393,27 +369,27 @@ export function resultObjects(args, payload) {
       if (topicId) result.push({ kind: "mail-thread", id: topicId, title: idFrom(row.name, row.subject, "Email conversation"), deepLink: `hey-agent://mail/threads/${encoded(topicId)}` });
     }
   } else if (root === "contact" && action === "threads") {
-    const contactId = idFrom(data.id, args[2]);
+    const contactId = idFrom(data.id, positional[2]);
     if (contactId) result.push({ kind: "contact", id: contactId, title: idFrom(data.name, data.email_address, "HEY contact"), subtitle: idFrom(data.entries_title, data.email_address) || undefined, deepLink: `hey-agent://mail/contacts/${encoded(contactId)}` });
     for (const row of (Array.isArray(data.postings) ? data.postings : []).slice(0, 11).map(objectValue)) {
       const topicId = idFrom(row.topic_id);
       if (topicId) result.push({ kind: "mail-thread", id: topicId, title: idFrom(row.name, row.subject, "Email conversation"), deepLink: `hey-agent://mail/threads/${encoded(topicId)}` });
     }
   } else if (root === "contact" && ["show", "add", "update"].includes(action)) {
-    const id = idFrom(data.id, nested.id, ["show", "update"].includes(action) ? args[2] : "");
+    const id = idFrom(data.id, nested.id, ["show", "update"].includes(action) ? positional[2] : "");
     if (id) result.push({ kind: "contact", id, title: idFrom(data.name, nested.name, "HEY contact"), deepLink: `hey-agent://mail/contacts/${encoded(id)}` });
   } else if (root === "collection" && ["create", "update", "view", "add", "remove"].includes(action)) {
-    const id = idFrom(data.id, nested.id, flagValue(args, "--to"), flagValue(args, "--from"), ["update", "view"].includes(action) ? args[2] : "");
-    if (id) result.push({ kind: "collection", id, title: idFrom(data.name, nested.name, action === "create" ? args[2] : "Collection"), deepLink: `hey-agent://mail/collections/${encoded(id)}` });
+    const id = idFrom(data.id, nested.id, flagValue(args, "--to"), flagValue(args, "--from"), ["update", "view"].includes(action) ? positional[2] : "");
+    if (id) result.push({ kind: "collection", id, title: idFrom(data.name, nested.name, action === "create" ? positional[2] : "Collection"), deepLink: `hey-agent://mail/collections/${encoded(id)}` });
   } else if (root === "label" && ["create", "view", "add", "remove"].includes(action)) {
-    const id = idFrom(data.id, nested.id, flagValue(args, "--to"), flagValue(args, "--from"), action === "view" ? args[2] : "");
-    if (id && id !== "all") result.push({ kind: "label", id, title: idFrom(data.name, nested.name, action === "create" ? args[2] : "Label"), deepLink: `hey-agent://mail/labels/${encoded(id)}` });
-  } else if (root === "box" && action === "view" && args[2]) {
-    result.push({ kind: "mailbox", id: args[2], title: stringValue(data.name) || args[2], deepLink: `hey-agent://mail/boxes/${encoded(args[2])}` });
+    const id = idFrom(data.id, nested.id, flagValue(args, "--to"), flagValue(args, "--from"), action === "view" ? positional[2] : "");
+    if (id && id !== "all") result.push({ kind: "label", id, title: idFrom(data.name, nested.name, action === "create" ? positional[2] : "Label"), deepLink: `hey-agent://mail/labels/${encoded(id)}` });
+  } else if (root === "box" && action === "view" && positional[2]) {
+    result.push({ kind: "mailbox", id: positional[2], title: stringValue(data.name) || positional[2], deepLink: `hey-agent://mail/boxes/${encoded(positional[2])}` });
   } else if (root === "set-aside" && action === "view") {
     result.push({ kind: "mailbox", id: "asidebox", title: stringValue(data.name) || "Set Aside", deepLink: "hey-agent://mail/boxes/asidebox" });
   } else if (root === "set-aside" && action === "group") {
-    const groupAction = args[2] ?? "";
+    const groupAction = positional[2] ?? "";
     const groupRows = Array.isArray(rawData) ? rawData.slice(0, 12).map(objectValue) : [];
     if (groupAction === "list") {
       for (const row of groupRows) {
@@ -421,7 +397,7 @@ export function resultObjects(args, payload) {
         if (id) result.push({ kind: "set-aside-group", id, title: "Set Aside group", subtitle: `${idFrom(row.thread_count, "0")} conversations`, deepLink: `hey-agent://mail/set-aside/groups/${encoded(id)}` });
       }
     } else {
-      const id = idFrom(data.id, data.group_id, objectValue(data.group).id, ["view", "delete"].includes(groupAction) ? args[3] : flagValue(args, "--to"));
+      const id = idFrom(data.id, data.group_id, objectValue(data.group).id, ["view", "delete"].includes(groupAction) ? positional[3] : flagValue(args, "--to"));
       if (id) result.push({ kind: "set-aside-group", id, title: "Set Aside group", subtitle: idFrom(data.total_count) ? `${idFrom(data.total_count)} conversations` : undefined, deepLink: `hey-agent://mail/set-aside/groups/${encoded(id)}` });
     }
   }
@@ -429,7 +405,7 @@ export function resultObjects(args, payload) {
 }
 
 function refreshDomains(args) {
-  const root = args[0] ?? "";
+  const root = parseHeyArgs(args).positionals[0] ?? "";
   if (["calendar", "event", "todo", "habit", "timetrack", "journal"].includes(root)) return ["calendar"];
   if (["compose", "reply", "forward", "draft", "box", "bundle", "set-aside", "search", "thread", "attachment", "seen", "unseen", "move", "bubble", "trash", "spam", "ignore", "stop-ignoring", "label", "collection", "contact", "screener", "bulk-reply"].includes(root)) return ["mail"];
   return [];
@@ -473,7 +449,7 @@ export default function heyAgentExtension(pi) {
           if (typeof edited === "string") {
             if (!edited.trim()) throw new Error("The approved HEY message cannot be empty.");
             executionArgs = [...args];
-            executionArgs[editable.argumentIndex] = edited;
+            executionArgs[editable.argumentIndex] = editable.valuePrefix + edited;
             confirmed = true;
           }
         } else {
@@ -492,6 +468,7 @@ export default function heyAgentExtension(pi) {
         };
       }
 
+      validateHeyArgs(executionArgs);
       const scopedArgs = accountScope ? await accountScope.prepare(executionArgs, async (query) => {
         const result = await pi.exec("hey", query, { signal, timeout: 60_000 });
         if (result.code !== 0) throw new Error(result.stderr || "Could not verify the account for this object.");

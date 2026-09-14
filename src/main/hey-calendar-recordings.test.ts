@@ -9,7 +9,7 @@ import {
 describe("HEY Calendar recordings bridge", () => {
   it("builds bounded argv-only todo and habit commands", () => {
     expect(todoListCommand({ startsOn: "2026-09-01", endsOn: "2026-09-07" })).toEqual(["todo", "list", "--starts-on", "2026-09-01", "--ends-on", "2026-09-07", "--all", "--json"]);
-    expect(todoCreateCommand({ title: "Return books", date: "2026-09-02" })).toEqual(["todo", "add", "Return books", "--date", "2026-09-02", "--json"]);
+    expect(todoCreateCommand({ title: "Return books", date: "2026-09-02" })).toEqual(["todo", "add", "--title", "Return books", "--date", "2026-09-02", "--json"]);
     expect(todoCompletionCommand({ id: "12", completed: false })).toEqual(["todo", "uncomplete", "12", "--json"]);
     expect(habitListCommand("2026-09-02")).toEqual(["habit", "list", "--date", "2026-09-02", "--all", "--json"]);
     expect(habitWriteCommand({ id: "13", name: "Read", icon: "read", color: "gold", days: [1, 3, 5] })).toEqual(["habit", "edit", "13", "--name", "Read", "--icon", "read", "--color", "gold", "--days", "1,3,5", "--json"]);
@@ -22,7 +22,7 @@ describe("HEY Calendar recordings bridge", () => {
     expect(timeListCommand("all")).toEqual(["timetrack", "list", "--all", "--json"]);
     expect(timeStopCommand({ category: "Client work" })).toEqual(["timetrack", "stop", "--category", "Client work", "--json"]);
     expect(timeUpdateCommand({ id: "21", start: "2026-09-02T09:00", end: "2026-09-02T10:15", notes: "Review" })).toEqual(["timetrack", "edit", "21", "--start", "2026-09-02T09:00", "--end", "2026-09-02T10:15", "--notes", "Review", "--json"]);
-    expect(timeCategoryRenameCommand("7", "Planning")).toEqual(["timetrack", "category", "rename", "7", "Planning", "--json"]);
+    expect(timeCategoryRenameCommand("7", "Planning")).toEqual(["timetrack", "category", "rename", "--json", "--", "7", "Planning"]);
   });
 
   it("normalizes every recording shape returned by HEY CLI 1.4", () => {
@@ -80,8 +80,8 @@ if (args[0] === "habit") {
   it("rejects invalid renderer requests at the IPC boundary", () => {
     expect(isCalendarTodoCreateRequest({ title: "Return books", date: "2026-09-02" })).toBe(true);
     expect(isCalendarTodoCreateRequest({ title: "", date: "tomorrow" })).toBe(false);
-    expect(isCalendarTodoCreateRequest({ title: "--json" })).toBe(false);
-    expect(isCalendarTodoCreateRequest({ title: " -x" })).toBe(false);
+    expect(isCalendarTodoCreateRequest({ title: "--json" })).toBe(true);
+    expect(isCalendarTodoCreateRequest({ title: " -x" })).toBe(true);
     expect(isCalendarTodoCompletionRequest({ id: "12", completed: true })).toBe(true);
     expect(isCalendarTodoCompletionRequest({ id: "todo-12", completed: true })).toBe(false);
     expect(isCalendarHabitWriteRequest({ name: "Read", icon: "read", color: "gold", days: [1, 3, 5] })).toBe(true);
@@ -95,7 +95,7 @@ if (args[0] === "habit") {
     expect(isCalendarTimeTrackUpdateRequest({ id: "21", start: "2026-09-02T09:00" })).toBe(true);
     expect(isCalendarTimeTrackUpdateRequest({ id: "21" })).toBe(false);
     expect(isCalendarTimeCategoryTitle("Planning")).toBe(true);
-    expect(isCalendarTimeCategoryTitle("--json")).toBe(false);
-    expect(isCalendarTimeCategoryTitle(" -x")).toBe(false);
+    expect(isCalendarTimeCategoryTitle("--json")).toBe(true);
+    expect(isCalendarTimeCategoryTitle(" -x")).toBe(true);
   });
 });

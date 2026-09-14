@@ -45,12 +45,28 @@ describe("shared native and Pi account guard", () => {
   it.each([
     ["-v", "42"],
     ["--count", "42"],
-    ["--whatever", "42"],
   ])("does not let %s hide a posting ID", async (flag, id) => {
     const scope = create();
     const read = vi.fn(async () => result([]));
     await expect(scope.prepare(["seen", flag, id], read)).rejects.toThrow("not been verified");
     expect(read).toHaveBeenCalled();
+  });
+  it("rejects unknown options before any ownership reads", async () => {
+    const read = vi.fn();
+    await expect(create().prepare(["seen", "--whatever", "42"], read)).rejects.toThrow("Unsupported HEY option");
+    expect(read).not.toHaveBeenCalled();
+  });
+  it("preserves literal values and checks IDs with interleaved flags and separators", async () => {
+    const scope = create(); own(scope);
+    const read = vi.fn();
+    for (const args of [
+      ["compose", "--subject", "--thread-id=99", "--thread-id=21", "-m", "--account=all"],
+      ["thread", "--json", "read", "21"],
+      ["seen", "--json", "--", "11"],
+    ]) expect(await scope.prepare(args, read)).toEqual(["--account", "101", "--base-url", "https://app.hey.com", ...args]);
+    expect(read).not.toHaveBeenCalled();
+    await expect(scope.prepare(["compose", "--thread-id=21", "--thread-id=99"], async () => result([]))).rejects.toThrow("not been verified");
+    await expect(scope.prepare(["seen", "--", "99"], async () => result([]))).rejects.toThrow("not been verified");
   });
   it("consumes only the known value for a flag before checking posting IDs", async () => {
     const scope = create();

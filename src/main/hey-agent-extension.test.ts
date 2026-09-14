@@ -70,7 +70,7 @@ describe("HEY Agent Pi extension", () => {
   it.each([
     ["reply", ["reply", "42", "-m", "Original reply"], "Message", "Original reply"],
     ["forward", ["forward", "42", "--message", "Original reply", "--to", "person@example.com"], "Message", "Original reply"],
-    ["compose", ["compose", "--to", "person@example.com", "--subject", "Planning", "--content", "Original reply"], "Message", "Original reply"],
+    ["compose", ["compose", "--to", "person@example.com", "--subject", "Planning", "--message", "Original reply"], "Message", "Original reply"],
     ["bulk reply", ["bulk-reply", "send", "42", "43", "-m", "Original reply"], "Message", "Original reply"],
     ["HTML reply", ["reply", "42", "--message-html", "<p>Original reply</p>"], "Message HTML", "<p>Original reply</p>"],
   ])("makes reviewed %s copy editable without presenting it as a duplicate field", (_name, args, label, value) => {
@@ -169,6 +169,46 @@ describe("HEY Agent Pi extension", () => {
     expect(extension.classifyHeyArgs(["compose", "--subject", "--help", "-m", "hello"])).toBe("external");
     expect(extension.classifyHeyArgs(["reply", "42", "-m", "--help"])).toBe("external");
     expect(extension.classifyHeyArgs(["reply", "--help"])).toBe("read");
+  });
+
+  it.each([
+    ["journal", "write", "--content-html", "--help"],
+    ["journal", "write", "-c", "--help"],
+    ["journal", "write", "--content-html=--help"],
+    ["journal", "write", "--", "--help"],
+    ["event", "add", "--title", "--help"],
+    ["compose", "--subject", "--draft", "--message=hello"],
+    ["compose", "--draft=false", "--message", "hello"],
+    ["compose", "--draft", "--draft=false", "--help=false"],
+  ])("requires approval for flag-shaped content %j", async (...args) => {
+    let tool: RegisteredTool | undefined;
+    const exec = vi.fn();
+    extension.default({ registerTool: (value) => { if (value.name === "hey") tool = value; }, exec });
+    const confirm = vi.fn().mockResolvedValue(false);
+    const result = await tool!.execute("literal-flags", { args }, new AbortController().signal, () => {}, { mode: "interactive", ui: { confirm } });
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(result.details.heyAgent.status).toBe("declined");
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown future option before approval or execution", async () => {
+    let tool: RegisteredTool | undefined;
+    const exec = vi.fn(); const confirm = vi.fn();
+    extension.default({ registerTool: (value) => { if (value.name === "hey") tool = value; }, exec });
+    await expect(tool!.execute("unknown", { args: ["journal", "write", "--future-content", "--help"] }, new AbortController().signal, () => {}, { mode: "interactive", ui: { confirm } })).rejects.toThrow("Unsupported HEY option");
+    expect(exec).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it.each(["--message=original", "--message-html=<p>original</p>"])("edits only the actual inline body %s", async (body) => {
+    let tool: RegisteredTool | undefined;
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: "{}", stderr: "" });
+    extension.default({ registerTool: (value) => { if (value.name === "hey") tool = value; }, exec });
+    const editor = vi.fn().mockResolvedValue("--help");
+    const args = ["compose", "--subject", "--message", body];
+    await tool!.execute("inline-edit", { args }, new AbortController().signal, () => {}, { mode: "rpc", ui: { confirm: vi.fn(), editor } });
+    expect(editor).toHaveBeenCalledOnce();
+    expect(exec).toHaveBeenCalledWith("hey", ["compose", "--subject", "--message", `${body.split("=")[0]}=--help`], expect.anything());
   });
 
   it("scopes embedded HEY reads and writes, rejects foreign IDs, and never changes CLI selection", async () => {

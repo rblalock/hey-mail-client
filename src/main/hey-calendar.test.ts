@@ -56,7 +56,7 @@ describe("HEY Calendar bridge", () => {
       repeat: "every_week",
       circle: true,
     })).toEqual([
-      "event", "add", "Design review", "--calendar", "42", "--starts-on", "2026-09-03",
+      "event", "add", "--title", "Design review", "--calendar", "42", "--starts-on", "2026-09-03",
       "--start-time", "14:00", "--end-time", "15:00", "--location", "Studio",
       "--link", "https://meet.example.com/room", "--notes", "Settle the launch plan.",
       "--invite", "alex@example.com", "--invite", "sam@example.com",
@@ -94,8 +94,8 @@ describe("HEY Calendar bridge", () => {
     expect(isCalendarEventCreateRequest({ ...valid, invites: ["not-an-email"] })).toBe(false);
     expect(isCalendarEventCreateRequest({ ...valid, link: "javascript:alert(1)" })).toBe(false);
     expect(isCalendarEventCreateRequest({ ...valid, repeatUntil: "2026-10-01" })).toBe(false);
-    expect(isCalendarEventCreateRequest({ ...valid, title: "--json" })).toBe(false);
-    expect(isCalendarEventCreateRequest({ ...valid, title: " -x" })).toBe(false);
+    expect(isCalendarEventCreateRequest({ ...valid, title: "--json" })).toBe(true);
+    expect(isCalendarEventCreateRequest({ ...valid, title: " -x" })).toBe(true);
   });
 
   it("accepts bounded edits and rejects ambiguous or empty updates", () => {
@@ -109,8 +109,8 @@ describe("HEY Calendar bridge", () => {
     expect(isCalendarEventUpdateRequest({ ...valid, invites: [] })).toBe(true);
     expect(isCalendarEventUpdateRequest({ ...valid, reminders: [] })).toBe(false);
     expect(isCalendarEventUpdateRequest({ ...valid, link: "" })).toBe(true);
-    expect(isCalendarEventUpdateRequest({ ...valid, title: "--json" })).toBe(false);
-    expect(isCalendarEventUpdateRequest({ ...valid, title: " -x" })).toBe(false);
+    expect(isCalendarEventUpdateRequest({ ...valid, title: "--json" })).toBe(true);
+    expect(isCalendarEventUpdateRequest({ ...valid, title: " -x" })).toBe(true);
   });
 
   it("scopes Calendar CLI calls inside a profile request", async () => {

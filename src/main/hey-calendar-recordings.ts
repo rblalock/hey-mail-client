@@ -28,8 +28,6 @@ const validId = (value: unknown): value is string => typeof value === "string" &
 const validTimestamp = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(value);
 const validFreeText = (value: unknown, maximum: number, allowEmpty = false): value is string =>
   typeof value === "string" && value.length <= maximum && (allowEmpty || value.trim().length > 0);
-const validBareFreeText = (value: unknown, maximum: number): value is string =>
-  validFreeText(value, maximum) && !value.trim().startsWith("-");
 
 function parseEnvelope(stdout: string): unknown {
   const payload: unknown = JSON.parse(stdout);
@@ -150,7 +148,7 @@ export function parseTimeCategories(stdout: string): CalendarTimeCategory[] {
 }
 
 export const todoListCommand = (request: CalendarWindowRequest): string[] => ["todo", "list", "--starts-on", request.startsOn, "--ends-on", request.endsOn, "--all", "--json"];
-export const todoCreateCommand = (request: CalendarTodoCreateRequest): string[] => ["todo", "add", request.title, ...(request.date ? ["--date", request.date] : []), "--json"];
+export const todoCreateCommand = (request: CalendarTodoCreateRequest): string[] => ["todo", "add", "--title", request.title, ...(request.date ? ["--date", request.date] : []), "--json"];
 export const todoCompletionCommand = (request: CalendarTodoCompletionRequest): string[] => ["todo", request.completed ? "complete" : "uncomplete", request.id, "--json"];
 export const todoDeleteCommand = (id: string): string[] => ["todo", "delete", id, "--json"];
 export const habitListCommand = (date: string): string[] => ["habit", "list", "--date", date, "--all", "--json"];
@@ -167,8 +165,8 @@ export const timeStartCommand = (): string[] => ["timetrack", "start", "--json"]
 export const timeStopCommand = (request: CalendarTimeStopRequest): string[] => ["timetrack", "stop", ...(request.category ? ["--category", request.category] : []), "--json"];
 export const timeUpdateCommand = (request: CalendarTimeTrackUpdateRequest): string[] => ["timetrack", "edit", request.id, ...(request.start ? ["--start", request.start] : []), ...(request.end ? ["--end", request.end] : []), ...(request.category ? ["--category", request.category] : []), ...(request.notes ? ["--notes", request.notes] : []), "--json"];
 export const timeDeleteCommand = (id: string): string[] => ["timetrack", "delete", id, "--json"];
-export const timeCategoryCreateCommand = (title: string): string[] => ["timetrack", "category", "create", title, "--json"];
-export const timeCategoryRenameCommand = (id: string, title: string): string[] => ["timetrack", "category", "rename", id, title, "--json"];
+export const timeCategoryCreateCommand = (title: string): string[] => ["timetrack", "category", "create", "--json", "--", title];
+export const timeCategoryRenameCommand = (id: string, title: string): string[] => ["timetrack", "category", "rename", "--json", "--", id, title];
 export const timeCategoryDeleteCommand = (id: string): string[] => ["timetrack", "category", "delete", id, "--json"];
 export const timeExportCommand = (path: string): string[] => ["timetrack", "export", "--output", path, "--json"];
 
@@ -352,7 +350,7 @@ export async function exportCalendarTimeTracks(path: string, env: NodeJS.Process
 
 export function isCalendarTodoCreateRequest(value: unknown): value is CalendarTodoCreateRequest {
   const request = record(value);
-  return validBareFreeText(request.title, 300) && (request.date === undefined || validDate(request.date));
+  return validFreeText(request.title, 300) && (request.date === undefined || validDate(request.date));
 }
 export function isCalendarTodoCompletionRequest(value: unknown): value is CalendarTodoCompletionRequest {
   const request = record(value); return validId(request.id) && typeof request.completed === "boolean";
@@ -381,5 +379,5 @@ export function isCalendarTimeTrackUpdateRequest(value: unknown): value is Calen
 }
 
 export function isCalendarTimeCategoryTitle(value: unknown): value is string {
-  return validBareFreeText(value, 200);
+  return validFreeText(value, 200);
 }
