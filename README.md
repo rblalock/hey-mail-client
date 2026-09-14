@@ -2,6 +2,8 @@
 
 A keyboard-first desktop app for HEY mail and Calendar, with your Pi agent alongside your inbox.
 
+[Watch the video demo →](https://x.com/rblalock/status/2099195188149211418)
+
 Work through your inbox, plan your day, and get help with the reply you've been putting off, all in one place.
 
 - Navigate, search, and organize mail with customizable keyboard shortcuts.
