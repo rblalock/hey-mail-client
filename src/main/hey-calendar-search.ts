@@ -1,5 +1,5 @@
 import type { CalendarSearchItem, CalendarSearchKind, CalendarSearchRequest, CalendarSearchResult } from "../shared/contracts";
-import { findExecutable, runFile } from "./process";
+import { findExecutable, runFile } from "./profile-process";
 import { calendarListCommand, parseCalendarWindow } from "./hey-calendar";
 import { parseJournalEntries, parseTimeTracks, parseTodos } from "./hey-calendar-recordings";
 

@@ -42,6 +42,22 @@ describe("shared native and Pi account guard", () => {
     expect(read).toHaveBeenCalledOnce();
     expect(read.mock.calls[0]![0]).toContain("imbox");
   });
+  it.each([
+    ["-v", "42"],
+    ["--count", "42"],
+    ["--whatever", "42"],
+  ])("does not let %s hide a posting ID", async (flag, id) => {
+    const scope = create();
+    const read = vi.fn(async () => result([]));
+    await expect(scope.prepare(["seen", flag, id], read)).rejects.toThrow("not been verified");
+    expect(read).toHaveBeenCalled();
+  });
+  it("consumes only the known value for a flag before checking posting IDs", async () => {
+    const scope = create();
+    const read = vi.fn(async () => result([{ id: 42, account_id: 101 }]));
+    await scope.prepare(["seen", "--limit", "5", "42"], read);
+    expect(read).toHaveBeenCalledOnce();
+  });
   it("verifies contacts, saved drafts, snippets and attachments without mixing identifier types", async () => {
     const scope = create(); own(scope);
     scope.learn(["thread", "read", "21"], result([{ id: 31 }]).stdout);

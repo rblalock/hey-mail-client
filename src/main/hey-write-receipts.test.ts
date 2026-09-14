@@ -21,3 +21,6 @@ it("does not record read-only HEY calls as pending changes", () => {
   for (const args of [["thread", "read", "1"], ["search", "hi"], ["bulk-reply", "preview", "1"], ["contact", "threads", "1"], ["set-aside", "group", "view", "1"]]) expect(isMailWrite(args)).toBe(false);
   for (const args of [["reply", "1"], ["draft", "send", "1"], ["seen", "1"], ["set-aside", "group", "create", "1"]]) expect(isMailWrite(args)).toBe(true);
 });
+it("does not record Calendar mutations as mail writes", () => {
+  expect(isMailWrite(["event", "add", "x"])).toBe(false);
+});

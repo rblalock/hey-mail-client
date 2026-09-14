@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  habitCompletionCommand, habitListCommand, habitWriteCommand, isCalendarHabitCompletionRequest, isCalendarHabitWriteRequest, isCalendarJournalWriteRequest, isCalendarTimeStopRequest, isCalendarTimeTrackUpdateRequest, isCalendarTodoCompletionRequest, isCalendarTodoCreateRequest, journalReadCommand, journalWriteCommand, listCalendarHabits, parseCurrentTimeTrack, parseHabitCompletions, parseHabits, parseJournalEntry, parseJournalEntries, parseTimeCategories, parseTimeTracks, parseTodos, timeCategoryRenameCommand, timeListCommand, timeStopCommand, timeUpdateCommand, todoCompletionCommand, todoCreateCommand, todoListCommand,
+  habitCompletionCommand, habitListCommand, habitWriteCommand, isCalendarHabitCompletionRequest, isCalendarHabitWriteRequest, isCalendarJournalWriteRequest, isCalendarTimeCategoryTitle, isCalendarTimeStopRequest, isCalendarTimeTrackUpdateRequest, isCalendarTodoCompletionRequest, isCalendarTodoCreateRequest, journalReadCommand, journalWriteCommand, listCalendarHabits, parseCurrentTimeTrack, parseHabitCompletions, parseHabits, parseJournalEntry, parseJournalEntries, parseTimeCategories, parseTimeTracks, parseTodos, timeCategoryRenameCommand, timeListCommand, timeStopCommand, timeUpdateCommand, todoCompletionCommand, todoCreateCommand, todoListCommand,
 } from "./hey-calendar-recordings";
 
 describe("HEY Calendar recordings bridge", () => {
@@ -80,15 +80,22 @@ if (args[0] === "habit") {
   it("rejects invalid renderer requests at the IPC boundary", () => {
     expect(isCalendarTodoCreateRequest({ title: "Return books", date: "2026-09-02" })).toBe(true);
     expect(isCalendarTodoCreateRequest({ title: "", date: "tomorrow" })).toBe(false);
+    expect(isCalendarTodoCreateRequest({ title: "--json" })).toBe(false);
+    expect(isCalendarTodoCreateRequest({ title: " -x" })).toBe(false);
     expect(isCalendarTodoCompletionRequest({ id: "12", completed: true })).toBe(true);
     expect(isCalendarTodoCompletionRequest({ id: "todo-12", completed: true })).toBe(false);
     expect(isCalendarHabitWriteRequest({ name: "Read", icon: "read", color: "gold", days: [1, 3, 5] })).toBe(true);
+    expect(isCalendarHabitWriteRequest({ name: "-ish habit", icon: "read", color: "gold", days: [1] })).toBe(true);
     expect(isCalendarHabitWriteRequest({ name: "Read", icon: "unknown", color: "gold", days: [] })).toBe(false);
     expect(isCalendarHabitCompletionRequest({ id: "13", date: "2026-09-02", completed: true })).toBe(true);
     expect(isCalendarJournalWriteRequest({ date: "2026-09-02", content: "" })).toBe(true);
+    expect(isCalendarJournalWriteRequest({ date: "2026-09-02", content: "- first\n- second" })).toBe(true);
     expect(isCalendarTimeStopRequest({ category: "Client work" })).toBe(true);
     expect(isCalendarTimeStopRequest({ category: "" })).toBe(false);
     expect(isCalendarTimeTrackUpdateRequest({ id: "21", start: "2026-09-02T09:00" })).toBe(true);
     expect(isCalendarTimeTrackUpdateRequest({ id: "21" })).toBe(false);
+    expect(isCalendarTimeCategoryTitle("Planning")).toBe(true);
+    expect(isCalendarTimeCategoryTitle("--json")).toBe(false);
+    expect(isCalendarTimeCategoryTitle(" -x")).toBe(false);
   });
 });

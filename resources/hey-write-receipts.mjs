@@ -21,6 +21,7 @@ export function acknowledgeHeyWrites(directory) {
 }
 export function isMailWrite(args) {
   const [root, action, sub] = args;
+  if (["calendar", "event", "todo", "habit", "timetrack", "journal"].includes(root)) return false;
   if (["search", "box", "thread", "bundle"].includes(root)) return false;
   if (root === "bulk-reply") return action !== "preview";
   if (root === "contact" && (["show", "threads"].includes(action) || action === "note" && sub === "show")) return false;

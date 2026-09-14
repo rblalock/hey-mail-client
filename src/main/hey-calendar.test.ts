@@ -1,9 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { calendarListCommand, eventAddCommand, eventDeleteCommand, eventEditCommand, eventPeriodCommand, isCalendarEventCreateRequest, isCalendarEventUpdateRequest, isCalendarWindowRequest, parseCalendarWindow } from "./hey-calendar";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HeyAccountScope } from "../../resources/hey-account-scope.mjs";
+import { calendarListCommand, createCalendarEvent, eventAddCommand, eventDeleteCommand, eventEditCommand, eventPeriodCommand, isCalendarEventCreateRequest, isCalendarEventUpdateRequest, isCalendarWindowRequest, listCalendarWindow, parseCalendarWindow } from "./hey-calendar";
+import { profileRequest } from "./profile-process";
+import { runFile as processRunFile } from "./process";
+
+vi.mock("./process", () => ({
+  findExecutable: vi.fn(async () => "/synthetic/hey"),
+  runFile: vi.fn(async () => ({ stdout: JSON.stringify({ data: [] }), stderr: "" })),
+}));
 
 const request = { startsOn: "2026-09-01", endsOn: "2026-09-07" };
 
 describe("HEY Calendar bridge", () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it("builds bounded read-only CLI commands", () => {
     expect(calendarListCommand()).toEqual(["calendar", "list", "--json"]);
     expect(eventPeriodCommand({ ...request, calendarId: "42" })).toEqual([
@@ -84,6 +94,8 @@ describe("HEY Calendar bridge", () => {
     expect(isCalendarEventCreateRequest({ ...valid, invites: ["not-an-email"] })).toBe(false);
     expect(isCalendarEventCreateRequest({ ...valid, link: "javascript:alert(1)" })).toBe(false);
     expect(isCalendarEventCreateRequest({ ...valid, repeatUntil: "2026-10-01" })).toBe(false);
+    expect(isCalendarEventCreateRequest({ ...valid, title: "--json" })).toBe(false);
+    expect(isCalendarEventCreateRequest({ ...valid, title: " -x" })).toBe(false);
   });
 
   it("accepts bounded edits and rejects ambiguous or empty updates", () => {
@@ -97,6 +109,19 @@ describe("HEY Calendar bridge", () => {
     expect(isCalendarEventUpdateRequest({ ...valid, invites: [] })).toBe(true);
     expect(isCalendarEventUpdateRequest({ ...valid, reminders: [] })).toBe(false);
     expect(isCalendarEventUpdateRequest({ ...valid, link: "" })).toBe(true);
+    expect(isCalendarEventUpdateRequest({ ...valid, title: "--json" })).toBe(false);
+    expect(isCalendarEventUpdateRequest({ ...valid, title: " -x" })).toBe(false);
+  });
+
+  it("scopes Calendar CLI calls inside a profile request", async () => {
+    const scope = new HeyAccountScope("123", "https://app.hey.com");
+    await profileRequest.run({ scope, env: { PATH: "/synthetic" } }, async () => {
+      await listCalendarWindow(request);
+      await createCalendarEvent({ title: "Planning", calendarId: "42", startsOn: "2026-09-03", allDay: true });
+    });
+    const calls = vi.mocked(processRunFile).mock.calls.map((call) => call[1]);
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(calls.every((args) => args.slice(0, 4).join(" ") === "--account 123 --base-url https://app.hey.com")).toBe(true);
   });
 
   it("normalizes HEY calendars and events in chronological order", () => {

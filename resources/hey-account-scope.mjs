@@ -1,8 +1,9 @@
+import { BOOLEAN_FLAGS, VALUE_FLAGS } from "./hey-cli-flags.mjs";
+
 // Application-level mail isolation. Shared by native calls and the Pi HEY tool.
 // Account filters are not authorization for arbitrary identity-owned object IDs.
 const CALENDAR = new Set(["calendar", "event", "todo", "habit", "timetrack", "journal"]);
 const POSTING = new Set(["move", "seen", "unseen", "trash", "spam", "ignore", "stop-ignoring"]);
-const FLAG_ONLY = new Set(["--json", "--html", "--all", "--quiet", "--draft", "--now", "--tomorrow", "--weekend", "--next-week", "--seen", "--spam", "--force"]);
 const rawData = (stdout) => { const value = JSON.parse(stdout); if (value.ok === false) throw new Error(value.error || "HEY read failed."); return value.data ?? value; };
 const rows = (data) => Array.isArray(data) ? data : data?.postings ?? data?.threads ?? data?.items ?? (data?.bubbled_up || data?.scheduled ? [...(data.bubbled_up ?? []), ...(data.scheduled ?? [])] : []);
 const mailboxQueries = ["imbox", "feedbox", "trailbox", "laterbox", "bubblebox"].map((box) => ["box", "view", box, "--all", "--json"]);
@@ -76,7 +77,10 @@ export class HeyAccountScope {
     const ids = (start) => {
       const values = [];
       for (let i = start; i < args.length; i++) {
-        if (args[i].startsWith("-")) { if (!FLAG_ONLY.has(args[i]) && !args[i].includes("=")) i++; }
+        if (args[i].startsWith("-")) {
+          if (BOOLEAN_FLAGS.has(args[i])) continue;
+          if (VALUE_FLAGS.has(args[i])) i++;
+        }
         else if (/^\d+$/.test(args[i])) values.push(args[i]);
       }
       return values;
