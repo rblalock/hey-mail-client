@@ -2,32 +2,26 @@
 
 ## Next
 
-- First-run setup for HEY/Pi readiness and login guidance.
-- Signature-verified in-app updates with restart approval and preserved app data. Updates are manual today.
-- Live testing with a second linked account. The laptop install passed; real two-account switching still needs testing.
-- Investigate intermittent typing failure after opening the app. Hiding/showing restored input; it has not been reproduced. On recurrence, check window focus, active element, inert ancestors, and dialog state without logging typed text. Don't add unconditional refocus loops.
+- Guided first-run setup for HEY CLI and Pi. Settings already shows runtime status; installation and login still happen outside the app.
+- Signed in-app updates, with approval before restarting and existing data preserved. Releases and manual installation are working.
 
-## Deferred
+## Still needs testing
 
-### Mail and desktop
+- Switching between two real linked accounts. The laptop install passed; live two-account testing is still outstanding.
+- Watch for the reported startup typing lockup. Keyboard routing and modal focus have been fixed, but that specific hide/show recovery case was never reproduced. Investigate if it returns; don't add automatic refocus loops.
 
-- Richer Markdown composition controls.
-- Sticky/merge bulk actions where supported by the CLI.
+## Possible later
+
+- Richer mail formatting controls and “Write Like Me” using explicitly selected writing samples.
+- Helper import/export and cross-machine sync. Custom Helpers already work locally.
+- Desktop notifications for new mail. Sound settings and action cues already exist.
 - Session working-directory selection.
-- Desktop notification and sound behavior; optional per-cue controls if needed.
+- Broader Linux and ARM64 testing. Omarchy x86-64 is the tested platform.
 
-### Helpers and agents
+## Revisit with CLI support
 
-- Write Like Me with explicitly selected writing samples.
-- Helper imports, sharing/export, version history, and cross-machine sync.
-- HEY Workflows and Workflow Organizer. Not currently in scope.
-- Scheduled briefs, auto-drafts, triage triggers, and unattended Helpers, with opt-in authority, cost limits, cancellation, and recovery.
-- More local handoff adapters and remote/URL integrations. Handoffs remain one-way; results synchronization is not promised.
-- Other embedded harnesses or an Omarchy agent broker if a suitable host contract becomes available.
+- RSVP, creating events from ordinary emails, and calendar management. Invitation attachment previews and adding a personal calendar copy already work; a copy does not send an RSVP.
+- An All Files browser, including files from a contact. Don't crawl the mailbox to approximate it.
+- Sticky/merge bulk actions.
 
-### Calendar and distribution
-
-- Native create-from-email, RSVP, and calendar creation/settings/sharing/import where the CLI supports them. External calendars stay read-only.
-- Broader Linux/ARM64 testing and Omarchy packaging/marketplace support.
-- Shared app metadata across machines. Per-profile Settings/Helper overrides only if requested.
-- Verified signing-key rotation and recovery before changing the release trust anchor.
+Automations, scheduled/unattended Helpers, and Workflow Organizer remain on hold. They are not part of the next release plan.
