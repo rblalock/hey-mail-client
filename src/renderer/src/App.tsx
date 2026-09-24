@@ -433,6 +433,10 @@ export default function App() {
   }, [bulkSelectedIds, mailbox]);
 
   const mutate = useCallback(async (request: MailMutationRequest): Promise<boolean> => {
+    if (request.operation === "move" && mailbox?.postings.some((posting) => posting.kind === "bundle" && request.postingIds.includes(posting.id))) {
+      setNotice({ message: "Open the contact bundle and select individual conversations to move." });
+      return false;
+    }
     const selectionCount = request.postingIds.length;
     const selection = selectionCount === 1 ? "this conversation" : `${selectionCount} conversations`;
     if (request.operation === "spam" && !await confirmAction(`Mark ${selection} as spam? This also trains HEY's filters.`, "Mark as spam")) return false;

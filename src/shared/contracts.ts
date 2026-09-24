@@ -78,6 +78,8 @@ export type CalendarPerson = {
 
 export type CalendarEvent = {
   id: string;
+  seriesId?: string;
+  recordingId?: string;
   occurrenceId?: string;
   title: string;
   startsAt: string;
@@ -139,6 +141,9 @@ export type MailCalendarInvite = {
 export type CalendarEventUpdateRequest = {
   id: string;
   lookupDate: string;
+  occurrenceId?: string;
+  applyTo?: "current" | "future";
+  allowPlainNotes?: boolean;
   title?: string;
   startsOn?: string;
   endsOn?: string;
@@ -303,6 +308,8 @@ export type MailComposerMode = "compose" | "reply" | "forward";
 
 export type MailSendRequest = {
   mode: MailComposerMode;
+  from?: string;
+  noNameTag?: boolean;
   topicId?: string;
   to?: string;
   cc?: string;
@@ -563,6 +570,7 @@ export type HelperSettings = {
 
 export type MailDraft = {
   id: string;
+  from?: string;
   subject: string;
   to: string;
   cc: string;
@@ -591,6 +599,8 @@ export type MailAttachment = {
 
 export type ThreadEntry = {
   id: string;
+  recipients?: { to: MailContact[]; cc: MailContact[]; bcc: MailContact[] };
+  receivedVia?: string[];
   sender: MailContact;
   occurredAt: string;
   body: string;
@@ -922,6 +932,11 @@ export type HeyAgentApi = {
     undoBulkReply(deliveryId: string): Promise<BulkReplyUndoResult>;
     unbundleContact(contactId: string): Promise<{ message: string }>;
     selectAttachments(): Promise<string[]>;
+    listSenders(): Promise<Array<{ id: string; email: string; default: boolean }>>;
+    importAttachments(files: import("./composer-attachments").ComposerFileInput[]): Promise<string[]>;
+    pasteAttachments(): Promise<string[]>;
+    describeAttachments(paths: string[]): Promise<import("./composer-attachments").ComposerFile[]>;
+    removeComposerAttachments(paths: string[]): Promise<void>;
     subscribe(listener: (change: MailWatchChange) => void): () => void;
   };
   calendar: {

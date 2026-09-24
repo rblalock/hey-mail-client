@@ -17,6 +17,7 @@ import { readerScrollIntent } from "../reader-scroll";
 import { hasNewThreadEntry } from "../thread-reconciliation";
 import { appSound } from "../sound";
 import ContactAvatar from "./ContactAvatar";
+import ComposerAttachments, { useComposerAttachments } from "./ComposerAttachments";
 import ComposerWritingAssistant, { type ComposerWritingHandle } from "./ComposerWritingAssistant";
 import DraftReviewDialog from "./DraftReviewDialog";
 import { draftReviewIssue, type DraftSuggestion } from "../draft-review";
@@ -104,6 +105,7 @@ export default function ThreadPanel({
   const [attachments, setAttachments] = useProfileValue<string[]>(`${draftKey}:attachments`, []);
   const [sending, setSending] = useState(false);
   const [composerError, setComposerError] = useState<string>();
+  const attachmentInput = useComposerAttachments(attachments, setAttachments, setComposerError, sending);
   const [menuOpen, setMenuOpen] = useState(false);
   const [replyExpanded, setReplyExpanded] = useProfileValue(`${draftKey}:expanded`, false);
   const [replyContext, setReplyContext] = useState<MailReplyContext>();
@@ -277,7 +279,7 @@ export default function ThreadPanel({
   };
 
   const submitReply = async (saveAsDraft = false) => {
-    if (submitting.current || !mailActions || !posting.topicId || sending || (!draft.trim() && attachments.length === 0)) return;
+    if (submitting.current || attachmentInput.busy.current || !mailActions || !posting.topicId || sending || (!draft.trim() && attachments.length === 0)) return;
     submitting.current = true;
     setSending(true); setComposerError(undefined);
     try {
@@ -298,16 +300,14 @@ export default function ThreadPanel({
         setPendingReply({ body: draft, attachments, sentAt: new Date().toISOString(), previousThread: thread });
         requestAnimationFrame(() => requestAnimationFrame(() => pendingReplyElement.current?.scrollIntoView({ block: "nearest" })));
       }
-      setDraft(""); setAttachments([]); setReplyExpanded(false); mailActions.onMailChanged(result, posting.topicId);
+      setDraft(""); attachmentInput.clear(); setReplyExpanded(false); mailActions.onMailChanged(result, posting.topicId);
     } catch (reason) {
       setComposerError(reason instanceof Error ? reason.message : "HEY could not save this reply.");
     } finally { submitting.current = false; setSending(false); }
   };
 
   const chooseAttachments = async () => {
-    const selected = await window.heyAgent.mail.selectAttachments();
-    if (selected.length) appSound.play("drop", "interface");
-    setAttachments((current) => [...new Set([...current, ...selected])]);
+    await attachmentInput.choose();
   };
 
   const replyKeys = useComposerKeyboard({
@@ -407,9 +407,10 @@ export default function ThreadPanel({
               {latest
                 ? <div className="entry-meta entry-disclosure">{meta}</div>
                 : <button type="button" className="entry-meta entry-disclosure" aria-expanded={expanded} onClick={() => toggleOlderEntry(entry.id)}>{meta}</button>}
-              {latest && recipients.length > 0 && <details className="entry-recipient-details">
+              {(recipients.length > 0 || Boolean(entry.receivedVia?.length)) && <details className="entry-recipient-details">
                 <summary>Recipients ({recipients.length})</summary>
-                <ul>{recipients.map((contact, recipientIndex) => <li key={recipientIndex}>{contactDetails(contact)}</li>)}</ul>
+                {entry.recipients ? <ul>{(["to", "cc", "bcc"] as const).flatMap((kind) => entry.recipients![kind].map((contact, index) => <li key={`${kind}:${index}`}>{kind.toUpperCase()}: {contactDetails(contact)}</li>))}</ul> : <ul>{recipients.map((contact, recipientIndex) => <li key={recipientIndex}>{contactDetails(contact)}</li>)}</ul>}
+                {entry.receivedVia?.length ? <p>Received via {entry.receivedVia.join(", ")}</p> : null}
               </details>}
               {expanded && <EmailBody entry={entry} onReaderKeyDown={readerKeyDown} onOpenObject={onOpenObject} />}
               {expanded && thread && <EmailAttachments topicId={thread.topicId} attachments={entry.attachments} />}
@@ -440,17 +441,17 @@ export default function ThreadPanel({
         </div> : <div className="reply-recipient-status">
           {replyContextError ? <><span>{replyContextError}</span>{replyContextRetryable && <button type="button" onClick={() => void loadReplyContext()}>Try again</button>}</> : <span>Loading reply recipients…</span>}
         </div>}
-        <textarea ref={replyInput} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Write your reply…" />
-        {attachments.length > 0 && <div className="composer-attachments compact">{attachments.map((path) => <span key={path}><Paperclip size={12} /> {fileName(path)} <button type="button" aria-label={`Remove ${fileName(path)}`} onClick={() => { appSound.play("deselect", "interface"); setAttachments((current) => current.filter((item) => item !== path)); }}><X size={11} /></button></span>)}</div>}
+        <textarea ref={replyInput} value={draft} onPaste={attachmentInput.onPaste} onDrop={attachmentInput.onDrop} onDragOver={attachmentInput.onDragOver} onChange={(event) => setDraft(event.target.value)} placeholder="Write your reply…" />
+        <ComposerAttachments value={attachmentInput} disabled={sending} />
         {composerError && <p className="composer-error compact">{composerError}</p>}
         <div className="composer-actions">
           <button className="icon-button" type="button" aria-label="Attach file" disabled={sending} data-tooltip="Attach file" data-shortcut={hint("composer-attach")} onClick={() => void chooseAttachments()}><Paperclip size={15} /></button>
           <ComposerWritingAssistant disabled={sending} ref={writingAssistant} value={draft} onChange={setDraft} textareaRef={replyInput} mode="reply" subject={posting.subject} recipients={[replyTo, replyCc, replyBcc].filter(Boolean).join(", ")} threadContext={writingThreadContext} />
           {onContinueInAgent && <button className="composer-agent-button" type="button" data-tooltip={continueInAgentLabel} data-tooltip-side="top" onClick={() => onContinueInAgent(draft)}><Sparkles size={14} /><span>{continueInAgentLabel}</span></button>}
-          <button className="composer-draft-button" type="button" data-tooltip="Save draft" data-shortcut={hint("composer-save")} data-tooltip-side="top" onClick={() => void submitReply(true)} disabled={sending || !posting.topicId || (!draft.trim() && attachments.length === 0)}><Save size={14} /><span>Save draft</span></button>
+          <button className="composer-draft-button" type="button" data-tooltip="Save draft" data-shortcut={hint("composer-save")} data-tooltip-side="top" onClick={() => void submitReply(true)} disabled={sending || attachmentInput.importing || !posting.topicId || (!draft.trim() && attachments.length === 0)}><Save size={14} /><span>Save draft</span></button>
           <span />
           <small>{hint("composer-send")}</small>
-          <button className="send-button" type="button" data-tooltip="Send reply" data-shortcut={hint("composer-send")} data-tooltip-side="top" onClick={() => void submitReply(false)} disabled={sending || !posting.topicId || (!draft.trim() && attachments.length === 0)}><Send size={14} /> {sending ? "Sending…" : "Send"}</button>
+          <button className="send-button" type="button" data-tooltip="Send reply" data-shortcut={hint("composer-send")} data-tooltip-side="top" onClick={() => void submitReply(false)} disabled={sending || attachmentInput.importing || !posting.topicId || (!draft.trim() && attachments.length === 0)}><Send size={14} /> {sending ? "Sending…" : "Send"}</button>
         </div>
       </div> : <button ref={collapsedReplyButton} type="button" className="thread-reply-collapsed" data-tooltip="Open reply" data-shortcut-id="reply" aria-expanded="false" onClick={openReply}>
         <Reply size={15} />

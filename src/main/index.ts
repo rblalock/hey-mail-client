@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from "electron";
+import { ComposerFiles, clipboardFilePaths } from "./composer-attachments";
 import type {
   AgentAttachment, AgentUiResponse, BulkReplySendRequest, ComposerWritingRequest, MailDraftUpdate, MailMutationRequest, MailSendRequest,
   MailboxKey, MailLibraryKind, MailOrganizationMutationRequest, MailOrganizationTarget, MailSearchRequest, NewAgentSessionRequest, ScreenerDecisionRequest, SetAsideGroupMutationRequest,
@@ -27,6 +28,7 @@ import { ThemeWatcher } from "./theme-watcher";
 import { installWindowZoom } from "./window-zoom";
 import { AccountProfiles } from "./account-profiles";
 import { profileRequest } from "./profile-process";
+import { findExecutable as findProfileExecutable, runFile as runProfileFile } from "./profile-process";
 import { cleanupMailAttachmentDownloads, downloadMailAttachment, resolveMailAttachment, saveMailAttachment } from "./mail-attachments";
 import { canOpenMailAttachment } from "../shared/mail-attachments";
 import { previewCalendarInvite } from "./mail-calendar-invite";
@@ -60,6 +62,15 @@ const writing = new PiWritingService(paths.workspace, process.env);
 const piExtensionPath = app.isPackaged ? join(process.resourcesPath, "hey-agent-pi-extension.mjs") : join(app.getAppPath(), "resources", "hey-agent-pi-extension.mjs");
 const helperRoot = app.isPackaged ? join(process.resourcesPath, "helpers") : join(app.getAppPath(), "resources", "helpers");
 const profiles = new AccountProfiles(paths);
+function composerFiles(): ComposerFiles {
+  const profile = profiles.state.active;
+  if (!profile) throw new Error("Choose a HEY account first.");
+  return new ComposerFiles(join(profiles.directories(profile.key).state, "composer-attachments"), (bytes) => {
+    const image = nativeImage.createFromBuffer(bytes);
+    if (image.isEmpty()) return undefined;
+    return image.resize({ width: 160, quality: "good" }).toDataURL();
+  });
+}
 let agent: AgentSessionManager;
 let handoffs: AgentHandoffs;
 let accountContext: ReturnType<typeof profileRequest.getStore>;
@@ -266,8 +277,30 @@ function registerIpc(): void {
   });
   handle("mail:select-attachments", async () => {
     if (!mainWindow) return [];
+    const files = composerFiles();
     const selection = await dialog.showOpenDialog(mainWindow, { properties: ["openFile", "multiSelections"] });
-    return selection.canceled ? [] : selection.filePaths;
+    return selection.canceled ? [] : files.importPaths(selection.filePaths);
+  });
+  handle("mail:list-senders", async () => {
+    const hey = await findProfileExecutable("hey");
+    if (!hey) throw new Error("HEY CLI is unavailable.");
+    const { stdout } = await runProfileFile(hey, ["account", "senders", "--json"], { timeoutMs: 20_000 });
+    const data: unknown = JSON.parse(stdout).data;
+    if (!Array.isArray(data)) throw new Error("HEY did not return sender addresses.");
+    return data.map((sender) => ({ id: String(sender.id), email: String(sender.email), default: sender.default === true }));
+  });
+  handle("mail:import-attachments", (_event, files) => composerFiles().importBytes(files));
+  handle("mail:describe-attachments", (_event, paths) => composerFiles().describe(paths));
+  handle("mail:remove-composer-attachments", (_event, paths) => composerFiles().remove(paths));
+  handle("mail:paste-attachments", async () => {
+    const files = composerFiles();
+    for (const item of await clipboard.read()) {
+      const format = item.types.find((value) => value.includes("x-special/gnome-copied-files") || value.includes("text/uri-list"));
+      if (!format) continue;
+      const data = await item.getType(format);
+      if (data instanceof Blob) return files.importPaths(clipboardFilePaths(await data.text()));
+    }
+    return [];
   });
   handle("calendar:list", (_event, request) => {
     if (!isCalendarWindowRequest(request)) throw new Error("A valid HEY Calendar window is required.");
@@ -547,7 +580,8 @@ function isMailSendRequest(value: unknown): value is MailSendRequest {
     && typeof request.body === "string"
     && Array.isArray(request.attachments)
     && request.attachments.every((path) => typeof path === "string")
-    && [request.topicId, request.to, request.cc, request.bcc, request.subject].every((item) => item === undefined || typeof item === "string")
+    && [request.topicId, request.to, request.cc, request.bcc, request.subject, request.from].every((item) => item === undefined || typeof item === "string")
+    && (request.noNameTag === undefined || typeof request.noNameTag === "boolean")
     && (request.saveAsDraft === undefined || typeof request.saveAsDraft === "boolean");
 }
 

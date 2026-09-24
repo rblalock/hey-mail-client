@@ -28,7 +28,7 @@ export class HeyAccountScope {
     for (const option of parsed.options) {
       if (["--account", "--base-url", "--token", "--cookie", "--config", "--api-key", "--account-user-id"].includes(option.name)) throw new Error("Account and server overrides are not allowed in this profile.");
     }
-    if (parsed.positionals[0] === "account" && parsed.positionals[1] !== "list") throw new Error("Switch accounts using the app's account control.");
+    if (parsed.positionals[0] === "account" && !["list", "senders"].includes(parsed.positionals[1])) throw new Error("Switch accounts using the app's account control.");
   }
   learn(args, stdout) {
     let data;

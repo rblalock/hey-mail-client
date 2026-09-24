@@ -9,6 +9,11 @@ const RUNTIMES: Array<{ id: RuntimeId; label: string; args: string[] }> = [
   { id: "pi", label: "Pi", args: ["--version"] },
 ];
 
+export function supportedHeyVersion(version: string): boolean {
+  const match = version.match(/\b(\d+)\.(\d+)\.(\d+)\b/);
+  return Boolean(match && (Number(match[1]) > 1 || Number(match[1]) === 1 && Number(match[2]) >= 6));
+}
+
 function installedHeySkill(env: NodeJS.ProcessEnv): string | undefined {
   const home = env.HOME || homedir();
   const candidates = [
@@ -54,6 +59,7 @@ export async function probeRuntimes(env: NodeJS.ProcessEnv = process.env, extens
     try {
       const { stdout, stderr } = await runFile(executable, args, { env, timeoutMs: 5_000 });
       const version = (stdout || stderr).trim().split("\n")[0]?.trim();
+      if (id === "hey" && !supportedHeyVersion(version ?? "")) return { id, label, executable, version, status: "error", detail: "HEY CLI 1.6.0 or newer is required. Run hey upgrade, then restart HEY Agent." };
       return { id, label, executable, version, status: "ready" };
     } catch (error) {
       return {

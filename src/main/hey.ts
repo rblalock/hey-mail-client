@@ -676,6 +676,7 @@ function draftFrom(value: unknown): MailDraft {
   const item = record(value);
   return {
     id: stringValue(item.id),
+    ...(stringValue(item.from) ? { from: stringValue(item.from) } : {}),
     subject: readableText(stringValue(item.subject, "(No subject)")) || "(No subject)",
     to: addressList(item.to ?? item.to_recipients),
     cc: addressList(item.cc ?? item.cc_recipients),
@@ -746,7 +747,7 @@ export async function showDraft(id: string, env: NodeJS.ProcessEnv = process.env
   return parseDraftJson(stdout);
 }
 
-export async function editDraft(request: MailDraftUpdate, env: NodeJS.ProcessEnv = process.env): Promise<{ message: string }> {
+export function draftEditCommand(request: MailDraftUpdate): string[] {
   if (!/^\d+$/.test(request.id)) throw new Error("Invalid HEY draft ID.");
   validateAddressField(request.to); validateAddressField(request.cc); validateAddressField(request.bcc);
   const args = ["draft", "edit", request.id];
@@ -754,13 +755,25 @@ export async function editDraft(request: MailDraftUpdate, env: NodeJS.ProcessEnv
   if (request.cc !== undefined) args.push("--cc", request.cc);
   if (request.bcc !== undefined) args.push("--bcc", request.bcc);
   if (request.subject !== undefined) args.push("--subject", request.subject);
+  if (request.body !== undefined) args.push("--message", request.body);
   args.push("--json");
+  return args;
+}
+
+export async function editDraft(request: MailDraftUpdate, env: NodeJS.ProcessEnv = process.env): Promise<{ message: string }> {
+  const update = { ...request };
+  if (update.body !== undefined) {
+    const current = await showDraft(request.id, env);
+    if (update.body === current.body) delete update.body; // Keep HEY's original HTML and uploads verbatim.
+    else if (/📎|!\[|<img\b|<action-text-attachment\b/i.test(current.body)) {
+      throw new Error("This draft contains images or attachments. Edit its body in HEY to preserve them; recipient and subject changes are supported here.");
+    }
+  }
+  if (![update.to, update.cc, update.bcc, update.subject, update.body].some((field) => field !== undefined)) return { message: "Draft unchanged." };
+  const args = draftEditCommand(update);
   const executable = await findExecutable("hey", env);
   if (!executable) throw new Error("HEY CLI is unavailable.");
-  const runner = request.body === undefined
-    ? runFile(executable, args, { env, timeoutMs: 30_000 })
-    : runFileWithInput(executable, args, request.body, { env, timeoutMs: 30_000 });
-  const { stdout } = await runner;
+  const { stdout } = await runFile(executable, args, { env, timeoutMs: 30_000 });
   const payload = parseJson(stdout);
   return { message: stringValue(payload.summary, "Draft saved in HEY.") };
 }
@@ -907,6 +920,8 @@ function validateAddressField(value: string | undefined): void {
 }
 
 function validateSendRequest(request: MailSendRequest): void {
+  validateAddressField(request.from);
+  if (request.mode !== "compose" && (request.from !== undefined || request.noNameTag !== undefined)) throw new Error("Sender and name tag options apply to new messages only.");
   validateAddressField(request.to);
   validateAddressField(request.cc);
   validateAddressField(request.bcc);
@@ -960,6 +975,8 @@ export async function sendMail(request: MailSendRequest, env: NodeJS.ProcessEnv 
   if (request.cc?.trim()) args.push("--cc", request.cc.trim());
   if (request.bcc?.trim()) args.push("--bcc", request.bcc.trim());
   if (request.mode === "compose") args.push("--subject", request.subject!.trim());
+  if (request.mode === "compose" && request.from) args.push("--from", request.from);
+  if (request.mode === "compose" && request.noNameTag) args.push("--no-name-tag");
   for (const attachment of request.attachments) args.push("--attach", attachment);
   if (request.saveAsDraft) args.push("--draft");
   args.push("--json");
@@ -992,6 +1009,12 @@ function entryFrom(value: unknown): ThreadEntry {
   return {
     id: stringValue(entry.id),
     sender,
+    ...(entry.recipients && typeof entry.recipients === "object" ? { recipients: {
+      to: recipientList(record(entry.recipients).to),
+      cc: recipientList(record(entry.recipients).cc),
+      bcc: recipientList(record(entry.recipients).bcc),
+    } } : {}),
+    ...(Array.isArray(entry.received_via) ? { receivedVia: entry.received_via.map((value) => stringValue(record(value).email_address)).filter(Boolean) } : {}),
     occurredAt: normalizeHeyTimestamp(stringValue(entry.occurred_at, stringValue(entry.created_at))),
     body: readableText(stringValue(entry.plain_text, stringValue(entry.body, stringValue(entry.content))), { preserveMarkdownBreaks: true }),
     ...(typeof entry.html === "string" ? { html: entry.html } : {}),
@@ -1043,7 +1066,7 @@ export async function readThread(topicId: string, env: NodeJS.ProcessEnv = proce
     }),
     ...([...rich.entries()].some(([id, parsed]) => parsed.attachmentNames?.some((name) =>
       !thread.entries.find((entry) => entry.id === id)?.attachments?.some((file) => file.filename === name)))
-      ? { attachmentsError: thread.attachmentsError ?? "This message contains files that HEY CLI did not return. Update HEY CLI to 1.4.3 or newer, then reload. You can also open the conversation in HEY." } : {}),
+      ? { attachmentsError: thread.attachmentsError ?? "This message contains files that HEY CLI did not return. Update HEY CLI to 1.6.0 or newer, then reload. You can also open the conversation in HEY." } : {}),
   };
 }
 

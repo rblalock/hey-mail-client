@@ -5,6 +5,11 @@ const create = () => new HeyAccountScope("101", "https://app.hey.com");
 const own = (scope: HeyAccountScope) => scope.learn(["box", "view", "imbox", "--json"], result([{ id: 11, topic_id: 21, account_id: 101 }]).stdout);
 
 describe("shared native and Pi account guard", () => {
+  it("allows account-scoped senders but rejects cross-account results", async () => {
+    const scope = create();
+    expect(await scope.prepare(["account", "senders", "--json"], vi.fn())).toEqual(["--account", "101", "--base-url", "https://app.hey.com", "account", "senders", "--json"]);
+    expect(() => scope.learn(["account", "senders", "--json"], result([{ id: 1, account_id: 202, email: "other@example.test" }]).stdout)).toThrow("different account");
+  });
   it("guards the reverse directions of mail actions", async () => {
     const scope = create(); own(scope);
     for (const args of [["bubble", "pop", "11", "--json"], ["stop-ignoring", "11", "--json"], ["move", "11", "--to", "imbox", "--json"]]) {

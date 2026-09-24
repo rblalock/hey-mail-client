@@ -59,7 +59,15 @@ export class HeyWatcher {
     child.stdout.on("data", (chunk: string) => this.receive(chunk));
     child.stderr.resume();
     child.on("error", () => this.reconnect(child));
-    child.on("close", () => this.reconnect(child));
+    child.on("close", (code) => {
+      if (this.child !== child) return;
+      if (code === 2 || code === 3) {
+        this.child = undefined;
+        if (!this.stopping) this.onChange({ change: "disconnected" });
+        return; // Invalid arguments or expired authentication require user action.
+      }
+      this.reconnect(child);
+    });
   }
 
   stop(): void {

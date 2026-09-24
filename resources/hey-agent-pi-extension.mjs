@@ -38,7 +38,7 @@ const TOOL_PARAMETERS = {
 };
 
 const READ_ONLY = new Set([
-  "account:list", "attachment:list", "box:list", "box:view", "bubble:list", "bulk-reply:preview",
+  "account:list", "account:senders", "attachment:list", "box:list", "box:view", "bubble:list", "bulk-reply:preview",
   "bundle:view",
   "auth:status", "calendar:list", "clip:list", "collection:list", "collection:view", "commands:",
   "contact:list", "contact:show", "contact:threads", "contact:note:show", "doctor:", "draft:list", "draft:show",
@@ -188,6 +188,11 @@ function approvalFields(args) {
     if (invites.length) fields.push({ label: "Invitees", value: invites.join(", ") });
     const repeat = flagValue(args, "--repeat");
     if (repeat) fields.push({ label: "Repeats", value: repeat.replaceAll("_", " ") });
+    const occurrence = flagValue(args, "--occurrence");
+    if (occurrence) fields.push({ label: "Occurrence", value: occurrence });
+    const scope = flagValue(args, "--apply-to");
+    if (scope) fields.push({ label: "Applies to", value: scope === "future" ? "This and future occurrences" : "This occurrence only" });
+    if (parseHeyArgs(args).has("--allow-plain-notes")) fields.push({ label: "Notes", value: "Allow conversion to plain text (formatting may be lost)" });
   } else if (root === "todo") {
     if (action === "add") fields.push({ label: "Todo", value: flagValue(args, "--title") ?? positional[2] ?? "" });
     if (flagValue(args, "--date")) fields.push({ label: "Week of", value: flagValue(args, "--date") });
@@ -221,6 +226,9 @@ function approvalFields(args) {
     if (recipients.length) fields.push({ label: "Recipients", value: recipients.join(", ") });
     const subject = flagValue(args, "--subject");
     if (subject) fields.push({ label: "Subject", value: subject });
+    const from = flagValue(args, "--from");
+    if (from) fields.push({ label: "From", value: from });
+    if (root === "compose") fields.push({ label: "HEY name tag", value: parseHeyArgs(args).has("--no-name-tag") ? "Omitted" : "Included if configured in HEY" });
   } else if (root === "collection" || root === "label") {
     const target = flagValue(args, "--to") ?? flagValue(args, "--from") ?? positional[2];
     if (target) fields.push({ label: root === "collection" ? "Collection" : "Label", value: target });

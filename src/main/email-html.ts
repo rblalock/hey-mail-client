@@ -293,7 +293,8 @@ export function parseThreadHtmlDocument(stdout: string): Map<string, ParsedEmail
     if (!id) return;
     const articleBody = load($(article).html() ?? "", null, false);
     const header = articleBody.root().children("header").first();
-    const metadata = headerMetadata(header.text());
+    // 1.6 adds To/Cc/Received via rows; they are not part of the sender name.
+    const metadata = headerMetadata(header.children("div").length ? header.children("div").first().text() : header.text());
     header.remove();
     const visibleChildren = articleBody.root().children().filter((_childIndex, child) => {
       const node = articleBody(child);

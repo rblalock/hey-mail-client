@@ -3,17 +3,14 @@ import { useShortcutHints } from "../shortcut-context";
 import { AlertTriangle, Paperclip, Reply, RotateCw, Send, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BulkReplyPreview, BulkReplySendResult, MailContact } from "../../../shared/contracts";
-import { appSound } from "../sound";
+import ComposerAttachments, { useComposerAttachments } from "./ComposerAttachments";
+import { useProfileValue } from "../profile-storage";
 
 type BulkReplyComposerProps = {
   postingIds: string[];
   onClose: () => void;
   onComplete: (result: BulkReplySendResult) => void;
 };
-
-function fileName(path: string): string {
-  return path.split("/").at(-1) ?? path;
-}
 
 function recipientLabel(contact: MailContact): string {
   if (!contact.email || contact.name === contact.email) return contact.email ?? contact.name;
@@ -31,14 +28,15 @@ export default function BulkReplyComposer({ postingIds, onClose, onComplete }: B
   const submitting = useRef(false);
   useModalFocus(dialogRef);
   const [preview, setPreview] = useState<BulkReplyPreview>();
-  const [body, setBody] = useState("");
-  const [attachments, setAttachments] = useState<string[]>([]);
+  const [body, setBody] = useProfileValue(`bulk-reply:${postingIds.join(",")}:body`, "");
+  const [attachments, setAttachments] = useProfileValue<string[]>(`bulk-reply:${postingIds.join(",")}:attachments`, []);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
+  const attachmentInput = useComposerAttachments(attachments, setAttachments, setError, sending);
   const skippedCount = Math.max(0, postingIds.length - (preview?.items.length ?? 0));
   const replyCount = preview?.items.length ?? 0;
-  const canSend = replyCount > 0 && (body.trim().length > 0 || attachments.length > 0) && !sending && !loading;
+  const canSend = replyCount > 0 && (body.trim().length > 0 || attachments.length > 0) && !sending && !loading && !attachmentInput.importing;
   const selectionKey = useMemo(() => postingIds.join(","), [postingIds]);
 
   const loadPreview = async () => {
@@ -55,18 +53,18 @@ export default function BulkReplyComposer({ postingIds, onClose, onComplete }: B
   useEffect(() => { void loadPreview(); }, [selectionKey]);
 
   const chooseAttachments = async () => {
-    const selected = await window.heyAgent.mail.selectAttachments();
-    if (selected.length) appSound.play("drop", "interface");
-    setAttachments((current) => [...new Set([...current, ...selected])]);
+    await attachmentInput.choose();
   };
 
   const submit = async () => {
-    if (!canSend || submitting.current) return;
+    if (!canSend || submitting.current || attachmentInput.busy.current) return;
     submitting.current = true;
     setSending(true);
     setError(undefined);
     try {
-      onComplete(await window.heyAgent.mail.sendBulkReply({ postingIds, body, attachments }));
+      const result = await window.heyAgent.mail.sendBulkReply({ postingIds, body, attachments });
+      attachmentInput.clear(); setBody("");
+      onComplete(result);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "HEY could not send these replies. Check HEY before trying again.");
     } finally { submitting.current = false; setSending(false); }
@@ -99,8 +97,8 @@ export default function BulkReplyComposer({ postingIds, onClose, onComplete }: B
         </div> : null}
       </div>
 
-      <textarea autoFocus={!loading && Boolean(preview)} value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write one reply for these conversations…" aria-label="Bulk reply message" />
-      {attachments.length > 0 ? <div className="composer-attachments">{attachments.map((path) => <span key={path}><Paperclip size={12} /> {fileName(path)} <button type="button" aria-label={`Remove ${fileName(path)}`} onClick={() => { appSound.play("deselect", "interface"); setAttachments((current) => current.filter((item) => item !== path)); }}><X size={11} /></button></span>)}</div> : null}
+      <textarea autoFocus={!loading && Boolean(preview)} value={body} onPaste={attachmentInput.onPaste} onDrop={attachmentInput.onDrop} onDragOver={attachmentInput.onDragOver} onChange={(event) => setBody(event.target.value)} placeholder="Write one reply for these conversations…" aria-label="Bulk reply message" />
+      <ComposerAttachments value={attachmentInput} disabled={sending} />
       {error && preview ? <p className="composer-error">{error}</p> : null}
 
       <footer>

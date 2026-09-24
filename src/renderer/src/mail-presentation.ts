@@ -29,6 +29,7 @@ export function addressedContacts(posting: ImboxPosting): MailContact[] {
 // List addressing belongs to the latest activity only. Do not copy it onto
 // historical entries, or onto a newer message when the list cache is stale.
 export function entryAddressedContacts(posting: ImboxPosting, entry: ThreadEntry, latest: boolean, entryCount: number): MailContact[] {
+  if (entry.recipients) return [...entry.recipients.to, ...entry.recipients.cc, ...entry.recipients.bcc];
   const time = Date.parse(entry.occurredAt);
   const postingTime = Date.parse(posting.createdAt);
   // HEY's thread command truncates message dates to minutes; mailbox dates

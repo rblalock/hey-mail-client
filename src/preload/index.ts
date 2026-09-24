@@ -48,6 +48,11 @@ const api: HeyAgentApi = {
     undoBulkReply: (deliveryId) => invoke("mail:bulk-reply-undo", deliveryId),
     unbundleContact: (contactId) => invoke("mail:unbundle-contact", contactId),
     selectAttachments: () => invoke("mail:select-attachments"),
+    listSenders: () => invoke("mail:list-senders"),
+    importAttachments: (files) => invoke("mail:import-attachments", files),
+    pasteAttachments: () => invoke("mail:paste-attachments"),
+    describeAttachments: (paths) => invoke("mail:describe-attachments", paths),
+    removeComposerAttachments: (paths) => invoke("mail:remove-composer-attachments", paths),
     subscribe: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, change: Parameters<typeof listener>[0]) => listener(change);
       ipcRenderer.on("mail:changed", handler);

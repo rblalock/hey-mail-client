@@ -98,6 +98,8 @@ function eventFrom(value: unknown, calendars: Map<string, CalendarSummary>): Cal
   return {
     id,
     ...(stringValue(event.occurrence_id) ? { occurrenceId: stringValue(event.occurrence_id) } : {}),
+    ...(event.parent_id ? { seriesId: stringValue(event.parent_id) } : {}),
+    ...(event.recording_id ? { recordingId: stringValue(event.recording_id) } : {}),
     title: stringValue(event.title, "Untitled event"),
     startsAt,
     endsAt,
@@ -164,6 +166,8 @@ export function eventAddCommand(request: CalendarEventCreateRequest): string[] {
 export function eventEditCommand(request: CalendarEventUpdateRequest): string[] {
   return [
     "event", "edit", request.id, request.lookupDate,
+    ...(request.occurrenceId ? ["--occurrence", request.occurrenceId, "--apply-to", request.applyTo!] : []),
+    ...(request.allowPlainNotes ? ["--allow-plain-notes"] : []),
     ...(request.title !== undefined ? ["--title", request.title] : []),
     ...(request.startsOn !== undefined ? ["--starts-on", request.startsOn] : []),
     ...(request.endsOn !== undefined ? ["--ends-on", request.endsOn] : []),
@@ -222,6 +226,13 @@ export function isCalendarEventUpdateRequest(value: unknown): value is CalendarE
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const request = value as Partial<CalendarEventUpdateRequest>;
   if (typeof request.id !== "string" || !/^\d+$/.test(request.id) || !validDate(request.lookupDate)) return false;
+  if (request.occurrenceId !== undefined) {
+    if (typeof request.occurrenceId !== "string" || !request.occurrenceId.startsWith(`${request.id}_`) || !validDate(request.occurrenceId.slice(request.id.length + 1))) return false;
+    if (!["current", "future"].includes(request.applyTo ?? "")) return false;
+    if (request.applyTo === "current" && (request.repeat !== undefined || request.repeatUntil !== undefined)) return false;
+    if (request.applyTo === "future" && !request.repeat) return false;
+  } else if (request.applyTo !== undefined) return false;
+  if (request.allowPlainNotes !== undefined && typeof request.allowPlainNotes !== "boolean") return false;
   const changeKeys: Array<keyof CalendarEventUpdateRequest> = ["title", "startsOn", "endsOn", "allDay", "startTime", "endTime", "timeZone", "location", "link", "notes", "invites", "reminders", "repeat", "repeatUntil", "countdown", "countdownUnit", "circle"];
   if (!changeKeys.some((key) => Object.hasOwn(request, key))) return false;
   if (request.title !== undefined && (typeof request.title !== "string" || !request.title.trim() || request.title.length > 300)) return false;
@@ -237,7 +248,7 @@ export function isCalendarEventUpdateRequest(value: unknown): value is CalendarE
   if (request.reminders !== undefined && (!Array.isArray(request.reminders) || request.reminders.length === 0 || request.reminders.length > 10 || !request.reminders.every(validReminder))) return false;
   if (request.repeat !== undefined && !validRepeat(request.repeat)) return false;
   if (request.repeatUntil !== undefined && (!validDate(request.repeatUntil) || !request.repeat || request.startsOn && request.repeatUntil < request.startsOn)) return false;
-  if (request.countdown !== undefined && (!Number.isInteger(request.countdown) || request.countdown < 1 || request.countdown > 30)) return false;
+  if (request.countdown !== undefined && (!Number.isInteger(request.countdown) || request.countdown < 0 || request.countdown > 30)) return false;
   if (request.countdownUnit !== undefined && !["days", "weeks", "months"].includes(request.countdownUnit)) return false;
   return request.circle === undefined || typeof request.circle === "boolean";
 }

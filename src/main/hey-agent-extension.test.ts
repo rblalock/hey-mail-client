@@ -29,6 +29,15 @@ beforeAll(async () => {
 });
 
 describe("HEY Agent Pi extension", () => {
+  it("supports 1.6 commands while showing sender and recurrence scope in approval", () => {
+    expect(extension.classifyHeyArgs(["account", "senders", "--json"])).toBe("read");
+    const args = ["event", "edit", "48", "--occurrence", "48_2026-09-24", "--apply-to", "future", "--repeat", "every_week", "--allow-plain-notes"];
+    expect(extension.validateHeyArgs(args)).toEqual(args);
+    const fields = extension.approvalForHeyArgs(args).fields;
+    expect(fields).toContainEqual({ label: "Applies to", value: "This and future occurrences" });
+    expect(fields.some((field) => field.value.includes("formatting may be lost"))).toBe(true);
+    expect(extension.approvalForHeyArgs(["compose", "--from", "team@example.test", "--no-name-tag"]).fields).toContainEqual({ label: "From", value: "team@example.test" });
+  });
   it("classifies command boundaries without interpreting natural-language intent", () => {
     expect(extension.classifyHeyArgs(["search", "create an event tomorrow", "--json"])).toBe("read");
     expect(extension.classifyHeyArgs(["event", "add", "Planning", "--starts-on", "2026-09-03"])).toBe("external");

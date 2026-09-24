@@ -6,6 +6,7 @@ import { appSound } from "../sound";
 import { focusRecipient, useComposerKeyboard, useModalFocus } from "../composer-keyboard";
 import { useShortcutHints } from "../shortcut-context";
 import RecipientField from "./RecipientField";
+import ComposerAttachments, { useComposerAttachments } from "./ComposerAttachments";
 import ComposerWritingAssistant, { type ComposerWritingHandle } from "./ComposerWritingAssistant";
 
 type MailComposerProps = {
@@ -15,10 +16,6 @@ type MailComposerProps = {
   onClose: () => void;
   onComplete: (result: MailSendResult) => void;
 };
-
-function fileName(path: string): string {
-  return path.split("/").at(-1) ?? path;
-}
 
 export default function MailComposer({ mode, posting, initialTo = "", onClose, onComplete }: MailComposerProps) {
   const hint = useShortcutHints();
@@ -32,12 +29,22 @@ export default function MailComposer({ mode, posting, initialTo = "", onClose, o
   const [bcc, setBcc] = useProfileValue(`${draftKey}:bcc`, "");
   const [subject, setSubject] = useProfileValue(`${draftKey}:subject`, mode === "forward" && posting ? `Fwd: ${posting.subject}` : "");
   const [body, setBody] = useProfileValue(`${draftKey}:body`, "");
+  const [from, setFrom] = useProfileValue(`${draftKey}:from`, "");
+  const [includeNameTag, setIncludeNameTag] = useProfileValue(`${draftKey}:name-tag`, true);
+  const [senders, setSenders] = useState<Array<{ id: string; email: string; default: boolean }>>([]);
   const [attachments, setAttachments] = useProfileValue<string[]>(`${draftKey}:attachments`, []);
   const [error, setError] = useState<string>();
   const [sending, setSending] = useState(false);
+  const attachmentInput = useComposerAttachments(attachments, setAttachments, setError, sending, mode === "forward" ? "HEY CLI cannot add files to a forward yet. Attach them to a new message or reply instead." : undefined);
   const [contacts, setContacts] = useState<MailLibraryItem[]>([]);
   const bodyInput = useRef<HTMLTextAreaElement>(null);
   const writingAssistant = useRef<ComposerWritingHandle>(null);
+  useEffect(() => {
+    if (mode !== "compose") return;
+    let cancelled = false;
+    void window.heyAgent.mail.listSenders().then((value) => { if (!cancelled) setSenders(value); }).catch(() => { if (!cancelled) setError("Could not refresh sender addresses. HEY will validate the selected sender when you send."); });
+    return () => { cancelled = true; };
+  }, [mode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,16 +56,17 @@ export default function MailComposer({ mode, posting, initialTo = "", onClose, o
     return () => { cancelled = true; };
   }, []);
 
-  const canSend = !sending && Boolean(to.trim()) && (mode !== "compose" || Boolean(subject.trim()));
-  const canSave = !sending && mode === "compose" && Boolean(subject.trim() || body.trim());
+  const canSend = !sending && !attachmentInput.importing && Boolean(to.trim()) && (mode !== "compose" || Boolean(subject.trim()));
+  const canSave = !sending && !attachmentInput.importing && mode === "compose" && Boolean(subject.trim() || body.trim() || attachments.length);
   const submit = async (saveAsDraft = false) => {
-    if (submitting.current || !(saveAsDraft ? canSave : canSend)) return;
+    if (submitting.current || attachmentInput.busy.current || !(saveAsDraft ? canSave : canSend)) return;
     submitting.current = true;
     setSending(true);
     setError(undefined);
     try {
       const result = await window.heyAgent.mail.send({
         mode,
+        ...(mode === "compose" ? { from: from || undefined, noNameTag: !includeNameTag } : {}),
         ...(posting?.topicId ? { topicId: posting.topicId } : {}),
         to,
         cc,
@@ -68,7 +76,7 @@ export default function MailComposer({ mode, posting, initialTo = "", onClose, o
         attachments,
         saveAsDraft,
       });
-      setTo(initialTo); setCc(""); setBcc(""); setCcVisible(false); setSubject(""); setBody(""); setAttachments([]);
+      setTo(initialTo); setCc(""); setBcc(""); setCcVisible(false); setSubject(""); setBody(""); attachmentInput.clear();
       onComplete(result);
     } catch (reason) {
       appSound.play("error", "mail");
@@ -77,9 +85,7 @@ export default function MailComposer({ mode, posting, initialTo = "", onClose, o
   };
 
   const chooseAttachments = async () => {
-    const selected = await window.heyAgent.mail.selectAttachments();
-    if (selected.length) appSound.play("drop", "interface");
-    setAttachments((current) => [...new Set([...current, ...selected])]);
+    await attachmentInput.choose();
   };
 
   const handleKeys = useComposerKeyboard({
@@ -98,7 +104,7 @@ export default function MailComposer({ mode, posting, initialTo = "", onClose, o
           <span><FileText size={15} /> {mode === "compose" ? "New message" : "Forward"}</span>
           <button type="button" className="icon-button" aria-label="Close composer" data-tooltip="Close composer" data-shortcut="Esc" data-tooltip-side="left" onClick={onClose} disabled={sending}><X size={15} /></button>
         </header>
-        {window.heyAgent.profiles?.current.active && <div className="composer-account">From {window.heyAgent.profiles.current.active.email}</div>}
+        {mode === "compose" && senders.length > 1 ? <label className="composer-account composer-sender"><span>From</span><select aria-label="From" value={from} onChange={(event) => setFrom(event.target.value)}><option value="">Account default{senders.find((sender) => sender.default)?.email ? ` · ${senders.find((sender) => sender.default)!.email}` : ""}</option>{senders.map((sender) => <option key={sender.id} value={sender.email}>{sender.email}</option>)}</select></label> : window.heyAgent.profiles?.current.active && <div className="composer-account">From {from || senders.find((sender) => sender.default)?.email || window.heyAgent.profiles.current.active.email}</div>}
         <div className="composer-fields">
           <RecipientField label="To" value={to} onChange={setTo} contacts={contacts} autoFocus placeholder="Name or email" />
           {!ccVisible ? <button type="button" className="composer-recipients-toggle" data-tooltip="Show Cc / Bcc" data-shortcut={[hint("composer-cc"), hint("composer-bcc")].filter(Boolean).join(" / ")} onClick={() => setCcVisible(true)}>Cc / Bcc</button> : <>
@@ -108,8 +114,9 @@ export default function MailComposer({ mode, posting, initialTo = "", onClose, o
           {mode === "compose" && <label><span>Subject</span><input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Subject" /></label>}
         </div>
         {mode === "forward" && <div className="forward-context">Forwarding <strong>{posting?.subject}</strong></div>}
-        <textarea ref={bodyInput} value={body} onChange={(event) => setBody(event.target.value)} placeholder={mode === "compose" ? "Write your message…" : "Add a note…"} />
-        {attachments.length > 0 && <div className="composer-attachments">{attachments.map((path) => <span key={path}><Paperclip size={12} /> {fileName(path)} <button type="button" aria-label={`Remove ${fileName(path)}`} onClick={() => { appSound.play("deselect", "interface"); setAttachments((current) => current.filter((item) => item !== path)); }}><X size={11} /></button></span>)}</div>}
+        <textarea ref={bodyInput} value={body} onPaste={attachmentInput.onPaste} onDrop={attachmentInput.onDrop} onDragOver={attachmentInput.onDragOver} onChange={(event) => setBody(event.target.value)} placeholder={mode === "compose" ? "Write your message…" : "Add a note…"} />
+        <ComposerAttachments value={attachmentInput} disabled={sending} />
+        {mode === "compose" && <label className="composer-name-tag"><input type="checkbox" checked={includeNameTag} onChange={(event) => setIncludeNameTag(event.target.checked)} disabled={sending} /> Include my HEY name tag <small>(added when saved or sent)</small></label>}
         {error && <p className="composer-error">{error}</p>}
         <footer>
           {mode === "compose" && <button type="button" className="secondary-button" onClick={() => void submit(true)} data-tooltip="Save draft" data-shortcut={hint("composer-save")} disabled={!canSave}><Save size={14} /> Save draft</button>}
