@@ -60,7 +60,7 @@ app.on("second-instance", () => {
   mainWindow?.focus();
 });
 const settingsStore = new SettingsStore(join(paths.config, "settings.json"));
-const mailDiskCache = new MailDiskCache(join(paths.state, "mail-cache"));
+const mailDiskCache = new MailDiskCache(paths.mailCache);
 const cachedMailReader = new CachedMailReader(mailDiskCache, (topicId) => readThread(topicId, process.env, { includeHtml: true }));
 async function configureMailCache(settings: AppSettings): Promise<AppSettings> {
   await mailDiskCache.configure({ enabled: settings.mailCache.enabled, maxBytes: settings.mailCache.maxSizeMb * 1024 * 1024, retentionMs: settings.mailCache.retentionDays * 86_400_000 });

@@ -89,6 +89,7 @@ describe("Settings accordion", () => {
     expect(text).toContain("does not sync between computers");
     expect(text).toContain("Turning this off deletes the local cached copies");
     expect($("#mail-cache-budget").text()).toContain("shared across all accounts");
+    expect($(".mail-cache-location dt").text()).toBe("Cache folder");
     expect($("#mail-cache-size").attr("aria-describedby")).toBe("mail-cache-budget");
     expect($("#settings-mail-content .mail-cache-usage [role=status]").text()).toBe("Checking cache usage…");
     expect($("#settings-mail-content button.secondary-button").text()).toBe("Clear cached mail");

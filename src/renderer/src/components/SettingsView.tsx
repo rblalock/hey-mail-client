@@ -85,7 +85,7 @@ function formatCacheSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function MailCacheControls({ settings, visible, onSettings }: Pick<SettingsViewProps, "settings" | "onSettings"> & { visible: boolean }) {
+function MailCacheControls({ settings, visible, onSettings, location }: Pick<SettingsViewProps, "settings" | "onSettings"> & { visible: boolean; location?: string }) {
   const cache = settings.mailCache ?? DEFAULT_MAIL_CACHE_SETTINGS;
   const [stats, setStats] = useState<{ entries: number; bytes: number }>();
   const [usageError, setUsageError] = useState(false);
@@ -155,6 +155,7 @@ function MailCacheControls({ settings, visible, onSettings }: Pick<SettingsViewP
       <label htmlFor="mail-cache-retention"><span>Keep cached mail for</span><select id="mail-cache-retention" value={cache.retentionDays} disabled={!cache.enabled || !!action} onChange={(event) => void saveCache({ retentionDays: Number(event.currentTarget.value) as MailCacheSettings["retentionDays"] })}><option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option></select></label>
     </div>
     <p id="mail-cache-budget" className="settings-section-description">The size limit is shared across all accounts.</p>
+    <dl className="mail-cache-location"><dt>Cache folder</dt><dd>{location ?? "Loading…"}</dd></dl>
     <div className="settings-section-toolbar mail-cache-prefetch">
       <span><strong>Preload nearby emails</strong><small>Load nearby emails in the background for faster reading.</small></span>
       <SoundSwitch checked={cache.prefetch} label="Preload nearby emails" disabled={!cache.enabled || !!action} onChange={(prefetch) => void saveCache({ prefetch })} />
@@ -263,7 +264,7 @@ export default function SettingsView({ settings, theme, onSettings, onRunHelper,
       </SettingsSection>
 
       <SettingsSection {...sectionProps("mail")} title="Mail" icon={<Mail size={16} />} summary={mailCache.enabled ? `Local cache · ${mailCache.maxSizeMb} MB` : "Local cache off"}>
-        <MailCacheControls settings={settings} visible={openSection === "mail"} onSettings={onSettings} />
+        <MailCacheControls settings={settings} visible={openSection === "mail"} onSettings={onSettings} location={status?.paths.mailCache} />
       </SettingsSection>
 
       <SettingsSection {...sectionProps("shortcuts")} title="Keyboard shortcuts" icon={<Keyboard size={16} />} summary={PROFILES.find((profile) => profile.id === settings.shortcutProfile)!.title}>

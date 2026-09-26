@@ -267,6 +267,7 @@ export function previewApi(): HeyAgentApi {
           config: "/home/you/.config/hey-agent-app",
           data: "/home/you/.local/share/hey-agent-app",
           state: "/home/you/.local/state/hey-agent-app",
+          mailCache: "/home/you/.local/state/hey-agent-app/mail-cache",
           workspace: "/home/you/.local/share/hey-agent-app/workspace",
         },
         runtimes: [

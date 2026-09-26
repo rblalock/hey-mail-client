@@ -7,6 +7,7 @@ describe("resolveAppPaths", () => {
       config: "/home/alex/.config/hey-agent-app",
       data: "/home/alex/.local/share/hey-agent-app",
       state: "/home/alex/.local/state/hey-agent-app",
+      mailCache: "/home/alex/.local/state/hey-agent-app/mail-cache",
       workspace: "/home/alex/.local/share/hey-agent-app/workspace",
     });
   });
@@ -20,6 +21,7 @@ describe("resolveAppPaths", () => {
       config: "/config/hey-agent-app",
       data: "/home/alex/.local/share/hey-agent-app",
       state: "/state/hey-agent-app",
+      mailCache: "/state/hey-agent-app/mail-cache",
     });
   });
 });

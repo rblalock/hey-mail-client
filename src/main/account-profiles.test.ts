@@ -12,7 +12,7 @@ const second: MailAccountProfile = { ...first, key: "b".repeat(32), accountId: "
 const directories: string[] = [];
 async function fixture(accounts = [first, second]) {
   const directory = await mkdtemp(join(tmpdir(), "hey-profiles-")); directories.push(directory);
-  const paths: AppPaths = { config: join(directory, "config"), state: join(directory, "state"), data: join(directory, "data"), workspace: join(directory, "workspace") };
+  const paths: AppPaths = { config: join(directory, "config"), state: join(directory, "state"), mailCache: join(directory, "state", "mail-cache"), data: join(directory, "data"), workspace: join(directory, "workspace") };
   await mkdir(paths.state, { recursive: true });
   return { paths, profiles: new AccountProfiles(paths, async () => accounts) };
 }

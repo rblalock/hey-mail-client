@@ -20,6 +20,7 @@ export function resolveAppPaths(
     config: join(configRoot, APP_DIRECTORY),
     data: join(dataRoot, APP_DIRECTORY),
     state: join(stateRoot, APP_DIRECTORY),
+    mailCache: join(stateRoot, APP_DIRECTORY, "mail-cache"),
     workspace: join(dataRoot, APP_DIRECTORY, "workspace"),
   };
 }

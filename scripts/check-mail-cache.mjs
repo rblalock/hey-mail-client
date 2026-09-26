@@ -49,6 +49,7 @@ try {
   await browser("click", '[role="menuitem"]');
   await browser("click", '#settings-mail-toggle');
   await browser("snapshot", "-i");
+  await browser("wait", "--fn", "document.querySelector('.mail-cache-location dd')?.textContent === '/home/you/.local/state/hey-agent-app/mail-cache'");
   await evaluate(`(() => { if(document.querySelector('[aria-label="Keep a local mail cache"]').getAttribute('aria-checked')!=='false'||!document.querySelector('#mail-cache-size').disabled) throw Error('Cache not opt-in'); return true; })()`);
   await browser("click", '[aria-label="Keep a local mail cache"]');
   await browser("click", '[aria-label="Preload nearby emails"]');

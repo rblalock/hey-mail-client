@@ -13,6 +13,7 @@ export type AppPaths = {
   config: string;
   data: string;
   state: string;
+  mailCache: string;
   workspace: string;
 };
 
