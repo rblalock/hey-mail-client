@@ -116,6 +116,7 @@ export function classifyHeyArgs(args) {
   if (root === "auth" && second !== "status") return "restricted";
   if (root === "config") return "restricted";
   if (hasFlag(args, "--help") || hasFlag(args, "-h")) return "read";
+  if (root === "reply" && hasFlag(args, "--dry-run") && !hasFlag(args, "--draft")) return "read";
   if ((root === "compose" || root === "reply") && hasFlag(args, "--draft")) return "reversible";
   if (root === "compose") return "external";
   if (root === "timetrack" && second === "export" && !hasFlag(args, "--output") && !hasFlag(args, "-o")) return "read";
@@ -222,8 +223,11 @@ function approvalFields(args) {
       const count = positionalIds(args, 2).length;
       if (count) fields.push({ label: "Conversations", value: String(count) });
     }
-    const recipients = [...flagValues(args, "--to"), ...flagValues(args, "--cc"), ...flagValues(args, "--bcc")];
-    if (recipients.length) fields.push({ label: "Recipients", value: recipients.join(", ") });
+    for (const [flag, label] of [["--to", "To"], ["--cc", "Cc"], ["--bcc", "Bcc"]]) {
+      const recipients = flagValues(args, flag);
+      if (recipients.length) fields.push({ label, value: recipients.join(", ") || "None" });
+    }
+    if (root === "reply") fields.push({ label: "Reply recipients", value: hasFlag(args, "--replace-recipients") ? "Only the addresses listed above" : "HEY's suggested recipients, with any changes listed above" });
     const subject = flagValue(args, "--subject");
     if (subject) fields.push({ label: "Subject", value: subject });
     const from = flagValue(args, "--from");

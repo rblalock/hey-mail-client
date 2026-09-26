@@ -32,6 +32,12 @@ describe("shared native and Pi account guard", () => {
     for (const args of [["thread", "read", "21", "--json"], ["bulk-reply", "preview", "11", "--json"], ["compose", "--thread-id=21", "-m", "Hello"], ["seen", "11"], ["label", "create", "Project", "11"]]) await scope.prepare(args, read);
     expect(read).not.toHaveBeenCalled();
   });
+  it("still verifies thread ownership for reply recipient previews", async () => {
+    const args = ["reply", "21", "--dry-run", "--replace-recipients", "--to", "person@example.test", "--json"];
+    const scope = create(); own(scope);
+    expect(await scope.prepare(args, vi.fn())).toEqual(["--account", "101", "--base-url", "https://app.hey.com", ...args]);
+    await expect(new HeyAccountScope("202", "https://app.hey.com").prepare(args, async () => result([]))).rejects.toThrow("not been verified");
+  });
   it("never trusts another profile's IDs or mixed-account output", async () => {
     const first = create(); own(first);
     const second = new HeyAccountScope("202", "https://app.hey.com");

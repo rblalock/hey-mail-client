@@ -58,7 +58,8 @@ describe("HEY CLI 1.6 compatibility", () => {
   });
   it("detects outdated runtime versions", () => {
     expect(supportedHeyVersion("hey version 1.4.3")).toBe(false);
-    expect(supportedHeyVersion("hey version 1.6.0")).toBe(true);
+    expect(supportedHeyVersion("hey version 1.6.0")).toBe(false);
+    expect(supportedHeyVersion("hey version 1.7.0")).toBe(true);
     expect(supportedHeyVersion("hey version 2.0.0")).toBe(true);
     expect(supportedHeyVersion("unknown")).toBe(false);
   });

@@ -1,6 +1,7 @@
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { parseHeyArgs } from "./hey-cli-flags.mjs";
 
 // Interrupted or unconfirmed writes leave a receipt, surviving app/Pi restarts.
 // No mail bodies are stored. Only explicit user acknowledgment clears unknown outcomes.
@@ -20,7 +21,10 @@ export function acknowledgeHeyWrites(directory) {
   for (const name of pendingHeyWrites(directory)) unlinkSync(join(directory, name));
 }
 export function isMailWrite(args) {
-  const [root, action, sub] = args;
+  const parsed = parseHeyArgs(args);
+  const [root, action, sub] = parsed.positionals;
+  if (parsed.has("--help")) return false;
+  if (root === "reply" && parsed.has("--dry-run") && !parsed.has("--draft")) return false;
   if (["calendar", "event", "todo", "habit", "timetrack", "journal"].includes(root)) return false;
   if (["search", "box", "thread", "bundle"].includes(root)) return false;
   if (root === "bulk-reply") return action !== "preview";

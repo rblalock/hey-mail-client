@@ -1,5 +1,6 @@
 import type { CalendarEvent, CalendarEventCreateRequest, CalendarEventCreateResult, CalendarEventMutationResult, CalendarEventUpdateRequest, CalendarSummary, CalendarWindowRequest, CalendarWindowResult } from "../shared/contracts";
 import { findExecutable, runFile } from "./profile-process";
+import { isHeyAuthenticationFailure as authFailure } from "./hey-errors";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -267,11 +268,6 @@ export function parseCalendarWindow(
     .filter((event): event is CalendarEvent => Boolean(event))
     .sort((left, right) => left.startsAt.localeCompare(right.startsAt) || left.endsAt.localeCompare(right.endsAt));
   return { status: "ready", startsOn: request.startsOn, endsOn: request.endsOn, calendars, events };
-}
-
-function authFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /auth|login|credential|token|unauthorized|forbidden/i.test(message);
 }
 
 export async function listCalendarWindow(

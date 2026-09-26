@@ -10,6 +10,20 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("settings:update boundary", () => {
+  it("defaults mail caching off, persists bounded choices, and resets to off", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hey-cache-settings-")); roots.push(root);
+    const file = join(root, "settings.json"), store = new SettingsStore(file);
+    expect((await store.get()).mailCache).toEqual({ enabled: false, maxSizeMb: 100, retentionDays: 7, prefetch: true });
+    await updateSettingsFromIpc(store, { mailCache: { enabled: true, maxSizeMb: 50 } });
+    await updateSettingsFromIpc(store, { mailCache: { retentionDays: 30, prefetch: false } });
+    await updateSettingsFromIpc(store, { interfaceFont: "system" });
+    expect((await new SettingsStore(file).get()).mailCache).toEqual({ enabled: true, maxSizeMb: 50, retentionDays: 30, prefetch: false });
+    for (const mailCache of [null, [], { enabled: "yes" }, { prefetch: 1 }, { maxSizeMb: 0 }, { maxSizeMb: 99999 }, { retentionDays: 0 }, { retentionDays: "7" }]) {
+      expect(() => updateSettingsFromIpc(store, { mailCache })).toThrow("Invalid HEY Agent settings.");
+    }
+    expect((await store.get()).mailCache.enabled).toBe(true);
+    expect((await store.reset()).mailCache.enabled).toBe(false);
+  });
   it("merges concurrent per-command edits and preserves valid settings on rejection", async () => {
     const root = await mkdtemp(join(tmpdir(), "hey-shortcut-ipc-")); roots.push(root);
     const file = join(root, "settings.json"), store = new SettingsStore(file);

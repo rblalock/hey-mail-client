@@ -543,6 +543,7 @@ export type AppSettings = {
   version: 1;
   interfaceFont: InterfaceFont;
   showSenderAvatars: boolean;
+  mailCache: MailCacheSettings;
   shortcutProfile: ShortcutProfile;
   customShortcuts: Record<string, string[]>;
   sound: SoundSettings;
@@ -554,11 +555,23 @@ export type AppSettingsUpdate = {
   shortcutEdit?: { id: string; bindings: string[] | null };
   interfaceFont?: InterfaceFont;
   showSenderAvatars?: boolean;
+  mailCache?: Partial<MailCacheSettings>;
   shortcutProfile?: ShortcutProfile;
   customShortcuts?: Record<string, string[]>;
   sound?: Partial<SoundSettings>;
   ai?: Partial<AiSettings>;
   helpers?: Partial<HelperSettings>;
+};
+
+export type MailCacheSettings = {
+  enabled: boolean;
+  maxSizeMb: 50 | 100 | 250;
+  retentionDays: 1 | 7 | 30;
+  prefetch: boolean;
+};
+
+export const DEFAULT_MAIL_CACHE_SETTINGS: MailCacheSettings = {
+  enabled: false, maxSizeMb: 100, retentionDays: 7, prefetch: true,
 };
 
 export type HelperSettings = {
@@ -919,6 +932,7 @@ export type HeyAgentApi = {
     deleteDraft(id: string): Promise<{ message: string }>;
     getReplyContext(postingId: string): Promise<MailReplyContext>;
     readThread(topicId: string): Promise<MailThread>;
+    readCachedThread(topicId: string): Promise<MailThread | undefined>;
     openAttachment(topicId: string, attachmentId: string): Promise<void>;
     previewCalendarInvite(topicId: string, attachmentId: string): Promise<MailCalendarInvite>;
     saveAttachment(topicId: string, attachmentId: string): Promise<{ cancelled: boolean }>;
@@ -972,6 +986,8 @@ export type HeyAgentApi = {
     get(): Promise<AppSettings>;
     update(update: AppSettingsUpdate): Promise<AppSettings>;
     reset(): Promise<AppSettings>;
+    mailCacheStats(): Promise<{ entries: number; bytes: number }>;
+    clearMailCache(): Promise<void>;
   };
   writing: {
     listModels(refresh?: boolean): Promise<AgentModelCatalogItem[]>;

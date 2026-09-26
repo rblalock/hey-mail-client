@@ -2,6 +2,8 @@ export const BOOLEAN_FLAGS = new Set([
   "--help",
   "-h",
   "--draft",
+  "--dry-run",
+  "--replace-recipients",
   "--no-name-tag",
   "--allow-plain-notes",
   "--all",

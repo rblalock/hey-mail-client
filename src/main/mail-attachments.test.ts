@@ -65,7 +65,7 @@ describe("thread loading", () => {
       if (args.includes("--html")) return { stdout: '<article data-entry-id="42"><action-text-attachment content-type="text/calendar" filename="invite.ics"></action-text-attachment></article>', stderr: "" };
       return response({ entries: [{ id: 42, body: "Invitation" }] });
     });
-    expect((await readThread("21", process.env, { includeHtml: true })).attachmentsError).toContain("1.6.0");
+    expect((await readThread("21", process.env, { includeHtml: true })).attachmentsError).toContain("hey upgrade");
   });
   it("combines body, rich HTML and attachment details without dropping any of them", async () => {
     vi.mocked(runFile).mockImplementation(async (_command, args) => {

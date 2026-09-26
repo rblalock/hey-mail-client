@@ -29,6 +29,28 @@ beforeAll(async () => {
 });
 
 describe("HEY Agent Pi extension", () => {
+  it("treats only an effective reply dry-run as read-only", () => {
+    expect(extension.classifyHeyArgs(["reply", "42", "--dry-run", "--replace-recipients", "--to", "person@example.test"])).toBe("read");
+    expect(extension.classifyHeyArgs(["reply", "42", "--dry-run=true", "--draft=false"])).toBe("read");
+    for (const args of [
+      ["reply", "42", "--message", "--dry-run"],
+      ["reply", "42", "--dry-run=false"],
+      ["reply", "42", "--dry-run", "--dry-run=false"],
+      ["reply", "42", "--dry-run", "--draft"],
+      ["compose", "--dry-run", "--to", "person@example.test"],
+    ]) expect(extension.classifyHeyArgs(args)).not.toBe("read");
+  });
+  it("makes reply recipient replacement and To/Cc/Bcc explicit in approval", () => {
+    const args = ["reply", "42", "--replace-recipients", "--to", "one@example.test", "--to", "two@example.test", "--cc", "copy@example.test", "--bcc", "private@example.test", "-m", "Hello"];
+    expect(extension.validateHeyArgs(args)).toEqual(args);
+    expect(extension.approvalForHeyArgs(args).fields).toEqual(expect.arrayContaining([
+      { label: "To", value: "one@example.test, two@example.test" },
+      { label: "Cc", value: "copy@example.test" },
+      { label: "Bcc", value: "private@example.test" },
+      { label: "Reply recipients", value: "Only the addresses listed above" },
+    ]));
+    expect(extension.approvalForHeyArgs(["reply", "42", "--replace-recipients=false", "--cc", "copy@example.test"]).fields).toContainEqual({ label: "Reply recipients", value: "HEY's suggested recipients, with any changes listed above" });
+  });
   it("supports 1.6 commands while showing sender and recurrence scope in approval", () => {
     expect(extension.classifyHeyArgs(["account", "senders", "--json"])).toBe("read");
     const args = ["event", "edit", "48", "--occurrence", "48_2026-09-24", "--apply-to", "future", "--repeat", "every_week", "--allow-plain-notes"];
@@ -189,6 +211,9 @@ describe("HEY Agent Pi extension", () => {
     ["compose", "--subject", "--draft", "--message=hello"],
     ["compose", "--draft=false", "--message", "hello"],
     ["compose", "--draft", "--draft=false", "--help=false"],
+    ["reply", "42", "--message", "--dry-run"],
+    ["reply", "42", "--dry-run=false"],
+    ["reply", "42", "--dry-run", "--dry-run=false"],
   ])("requires approval for flag-shaped content %j", async (...args) => {
     let tool: RegisteredTool | undefined;
     const exec = vi.fn();

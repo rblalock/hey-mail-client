@@ -15,7 +15,10 @@ app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: false, width: 1500, height: 980, webPreferences: { backgroundThrottling: false } });
   // Hidden windows still play audio. Mute the test contents before loading the app.
   window.webContents.setAudioMuted(true);
-  const evaluate = (code) => window.webContents.executeJavaScript(code);
+  const evaluate = async (code) => {
+    try { return await window.webContents.executeJavaScript(code); }
+    catch (error) { throw new Error(`Renderer check failed: ${code}`, { cause: error }); }
+  };
   const until = async (code) => {
     for (let i = 0; i < 120; i++) { if (await evaluate(code)) return; await new Promise((resolve) => setTimeout(resolve, 30)); }
     throw new Error(`Timed out: ${code}`);

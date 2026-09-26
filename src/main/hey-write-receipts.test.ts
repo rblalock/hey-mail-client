@@ -24,3 +24,8 @@ it("does not record read-only HEY calls as pending changes", () => {
 it("does not record Calendar mutations as mail writes", () => {
   expect(isMailWrite(["event", "add", "x"])).toBe(false);
 });
+it("excludes recipient previews but not flag-shaped message bodies or disabled dry-runs", () => {
+  expect(isMailWrite(["reply", "1", "--dry-run", "--replace-recipients", "--to", "person@example.test"])).toBe(false);
+  expect(isMailWrite(["reply", "1", "--dry-run=true", "--draft=false"])).toBe(false);
+  for (const args of [["reply", "1", "--message", "--dry-run"], ["reply", "1", "--dry-run=false"], ["reply", "1", "--dry-run", "--dry-run=false"], ["reply", "1", "--dry-run", "--draft"], ["compose", "--dry-run"]]) expect(isMailWrite(args)).toBe(true);
+});

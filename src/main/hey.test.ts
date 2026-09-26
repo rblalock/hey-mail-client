@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressedReplyDraftCommand, bulkReplyPreviewCommand, bulkReplySendCommand, bulkReplyUndoCommand, libraryCommand, librarySourceCommand, mailboxCommand, mutationCommand, normalizeHeyTimestamp, organizationMutationCommand, organizationViewCommand, parseBulkReplyPreviewJson, parseBulkReplySendJson, parseContactJson, parseDraftJson, parseDraftListJson, parseImboxJson, parseLibraryJson, parseLibrarySourceJson, parseReplyContextJson, parseScreenerJson, parseSearchFiltersJson, parseSearchJson, parseThreadJson, parseThreadListingJson, readableText, replyContextCommand, searchCommand, setAsideGroupCommand, threadCommand, threadListingCommand } from "./hey";
+import { bulkReplyPreviewCommand, bulkReplySendCommand, bulkReplyUndoCommand, libraryCommand, librarySourceCommand, mailboxCommand, mutationCommand, normalizeHeyTimestamp, organizationMutationCommand, organizationViewCommand, parseBulkReplyPreviewJson, parseBulkReplySendJson, parseContactJson, parseDraftJson, parseDraftListJson, parseImboxJson, parseLibraryJson, parseLibrarySourceJson, parseReplyContextJson, parseScreenerJson, parseSearchFiltersJson, parseSearchJson, parseThreadJson, parseThreadListingJson, readableText, replyContextCommand, searchCommand, setAsideGroupCommand, threadCommand, threadListingCommand } from "./hey";
 
 describe("HEY JSON parsing", () => {
   it("keeps the outgoing creator's identity and the actual addressed contacts together", () => {
@@ -320,16 +320,6 @@ describe("HEY JSON parsing", () => {
       cc: [{ id: "2", name: "Casey Example", email: "casey@example.com" }],
       bcc: [],
     });
-  });
-
-  it("creates a reply draft before applying custom recipients", () => {
-    expect(addressedReplyDraftCommand({
-      mode: "reply",
-      topicId: "2111823348",
-      body: "Hello",
-      attachments: ["/tmp/notes.pdf"],
-      cc: "cc@example.com",
-    })).toEqual(["reply", "2111823348", "--attach", "/tmp/notes.pdf", "--draft", "--json"]);
   });
 
   it("previews every selected conversation by posting ID with exact recipients", () => {

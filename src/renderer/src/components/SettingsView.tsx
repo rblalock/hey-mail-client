@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, Volume2 as Volume2Data, VolumeX as VolumeXData } from "lucide";
-import { AudioLines, Check, FolderOpen, Keyboard, Play, RefreshCw, RotateCcw, ServerCog, Sparkles, WandSparkles, Type as TypeIcon } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { AGENT_THINKING_LEVELS, SOUND_PACKS, type AgentModelCatalogItem, type AgentModelProfile, type AiSettings, type AppSettings, type InterfaceFont, type ShortcutProfile, type SoundPack, type SoundSettings, type SystemStatus, type ThemeSnapshot } from "../../../shared/contracts";
+import { AudioLines, Check, FolderOpen, Keyboard, Mail, Play, RefreshCw, RotateCcw, ServerCog, Sparkles, WandSparkles, Type as TypeIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AGENT_THINKING_LEVELS, DEFAULT_MAIL_CACHE_SETTINGS, SOUND_PACKS, type AgentModelCatalogItem, type AgentModelProfile, type AiSettings, type AppSettings, type InterfaceFont, type MailCacheSettings, type ShortcutProfile, type SoundPack, type SoundSettings, type SystemStatus, type ThemeSnapshot } from "../../../shared/contracts";
 import { resolveShortcuts } from "../shortcuts";
 import { appSound } from "../sound";
 import MorphingIcon from "./MorphingIcon";
@@ -31,7 +31,7 @@ const INTERFACE_FONTS: Array<{ id: InterfaceFont; title: string; description: st
   { id: "system-mono", title: "System mono", description: "Use Omarchy's selected monospace font." },
 ];
 
-type SectionId = "typography" | "shortcuts" | "sound" | "models" | "helpers" | "services" | "details";
+type SectionId = "typography" | "mail" | "shortcuts" | "sound" | "models" | "helpers" | "services" | "details";
 
 function SettingsSection({ id, title, icon, summary, open, onToggle, children }: {
   id: SectionId; title: string; icon: ReactNode; summary: string; open: boolean;
@@ -79,7 +79,97 @@ function SoundSwitch({ checked, label, disabled, onChange }: { checked: boolean;
   return <button type="button" className="sound-switch" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}><span /></button>;
 }
 
+function formatCacheSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function MailCacheControls({ settings, visible, onSettings }: Pick<SettingsViewProps, "settings" | "onSettings"> & { visible: boolean }) {
+  const cache = settings.mailCache ?? DEFAULT_MAIL_CACHE_SETTINGS;
+  const [stats, setStats] = useState<{ entries: number; bytes: number }>();
+  const [usageError, setUsageError] = useState(false);
+  const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
+  const [action, setAction] = useState<"save" | "clear">();
+  const busy = useRef(false);
+  const statsRequest = useRef(0);
+
+  useEffect(() => {
+    if (!visible) return;
+    const request = ++statsRequest.current;
+    setStats(undefined);
+    setUsageError(false);
+    void window.heyAgent.settings.mailCacheStats().then((next) => {
+      if (request === statsRequest.current) setStats(next);
+    }, () => {
+      if (request === statsRequest.current) setUsageError(true);
+    });
+    return () => { statsRequest.current += 1; };
+  }, [visible, cache.enabled, cache.maxSizeMb, cache.retentionDays]);
+
+  const saveCache = async (mailCache: Partial<MailCacheSettings>) => {
+    if (busy.current) return;
+    busy.current = true;
+    setAction("save"); setError(undefined); setNotice(undefined);
+    try {
+      onSettings(await window.heyAgent.settings.update({ mailCache }));
+      if (mailCache.enabled === false) setNotice("Local cached mail deleted.");
+    } catch {
+      setError("Could not save the mail cache preference. Try again.");
+    } finally {
+      busy.current = false;
+      setAction(undefined);
+    }
+  };
+
+  const clearCache = async () => {
+    if (busy.current) return;
+    busy.current = true;
+    const request = ++statsRequest.current;
+    setAction("clear"); setError(undefined); setNotice(undefined);
+    try {
+      await window.heyAgent.settings.clearMailCache();
+      setNotice("Local cached mail cleared. Email in HEY is unchanged.");
+      await window.heyAgent.settings.mailCacheStats().then((next) => {
+        if (request === statsRequest.current) { setStats(next); setUsageError(false); }
+      }, () => {
+        if (request === statsRequest.current) setUsageError(true);
+      });
+    } catch {
+      setError("Could not clear cached mail. Try again.");
+    } finally {
+      busy.current = false;
+      setAction(undefined);
+    }
+  };
+
+  return <div className="mail-cache-settings">
+    <div className="settings-section-toolbar mail-cache-toggle">
+      <span><strong>Keep a local mail cache</strong><small>Open recently viewed emails faster.</small></span>
+      <SoundSwitch checked={cache.enabled} label="Keep a local mail cache" disabled={!!action} onChange={(enabled) => void saveCache({ enabled })} />
+    </div>
+    <p className="settings-section-description">Stores email bodies and attachment details on this computer, not downloaded attachment files. Cached mail does not sync between computers. Turning this off deletes the local cached copies.</p>
+    <div className="mail-cache-options">
+      <label htmlFor="mail-cache-size"><span>Maximum size</span><select id="mail-cache-size" value={cache.maxSizeMb} disabled={!cache.enabled || !!action} aria-describedby="mail-cache-budget" onChange={(event) => void saveCache({ maxSizeMb: Number(event.currentTarget.value) as MailCacheSettings["maxSizeMb"] })}><option value={50}>50 MB</option><option value={100}>100 MB</option><option value={250}>250 MB</option></select></label>
+      <label htmlFor="mail-cache-retention"><span>Keep cached mail for</span><select id="mail-cache-retention" value={cache.retentionDays} disabled={!cache.enabled || !!action} onChange={(event) => void saveCache({ retentionDays: Number(event.currentTarget.value) as MailCacheSettings["retentionDays"] })}><option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option></select></label>
+    </div>
+    <p id="mail-cache-budget" className="settings-section-description">The size limit is shared across all accounts.</p>
+    <div className="settings-section-toolbar mail-cache-prefetch">
+      <span><strong>Preload nearby emails</strong><small>Load nearby emails in the background for faster reading.</small></span>
+      <SoundSwitch checked={cache.prefetch} label="Preload nearby emails" disabled={!cache.enabled || !!action} onChange={(prefetch) => void saveCache({ prefetch })} />
+    </div>
+    <div className="settings-section-toolbar mail-cache-usage">
+      <span role="status">{usageError ? "Cache usage is unavailable. Reopen Mail to retry." : stats ? `${formatCacheSize(stats.bytes)} used · ${stats.entries} cached ${stats.entries === 1 ? "thread" : "threads"}` : "Checking cache usage…"}</span>
+      <button type="button" className="secondary-button" disabled={!!action || stats?.entries === 0} onClick={() => void clearCache()}>{action === "clear" ? "Clearing…" : "Clear cached mail"}</button>
+    </div>
+    {notice && <p className="mail-cache-notice" role="status">{notice}</p>}
+    {error && <p className="settings-inline-error" role="alert">{error}</p>}
+  </div>;
+}
+
 export default function SettingsView({ settings, theme, onSettings, onRunHelper, onEditHelper, runnableHelpers, busyHelpers }: SettingsViewProps) {
+  const mailCache = settings.mailCache ?? DEFAULT_MAIL_CACHE_SETTINGS;
   const [openSection, setOpenSection] = useState<SectionId | null>(null);
   const toggleSection = (id: SectionId) => {
     appSound.play(openSection === id ? "close" : "open", "interface");
@@ -170,6 +260,10 @@ export default function SettingsView({ settings, theme, onSettings, onRunHelper,
           <SoundSwitch checked={settings.showSenderAvatars} label="Show sender avatars" disabled={savingAppearance} onChange={(checked) => void chooseSenderAvatars(checked)} />
         </div>
         {appearanceError && <p className="settings-inline-error" role="alert">{appearanceError}</p>}
+      </SettingsSection>
+
+      <SettingsSection {...sectionProps("mail")} title="Mail" icon={<Mail size={16} />} summary={mailCache.enabled ? `Local cache · ${mailCache.maxSizeMb} MB` : "Local cache off"}>
+        <MailCacheControls settings={settings} visible={openSection === "mail"} onSettings={onSettings} />
       </SettingsSection>
 
       <SettingsSection {...sectionProps("shortcuts")} title="Keyboard shortcuts" icon={<Keyboard size={16} />} summary={PROFILES.find((profile) => profile.id === settings.shortcutProfile)!.title}>

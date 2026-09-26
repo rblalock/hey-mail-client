@@ -5,7 +5,7 @@ Early testing software. The app bundles Electron, its Pi extension, and all six 
 ## Requirements on each machine
 
 - A recent Linux desktop on x86-64 (Intel/AMD) or ARM64, using a matching build. The initial verified platform is x86-64 Omarchy.
-- HEY CLI 1.4.0 or newer, installed and signed in on that machine.
+- HEY CLI 1.7.0 or newer, installed and signed in on that machine.
 - Pi installed and configured with a working model. This release is verified with Pi 0.84.4. A standalone Pi binary does not need a separate Node installation; an npm-installed Pi does.
 - The HEY skill installed for Pi through HEY's setup flow. The app packages its focused Helpers separately.
 - AppImage runtime support, including FUSE 2 (`libfuse.so.2`) and the normal Electron desktop libraries. Omarchy on the test machine already provides these.

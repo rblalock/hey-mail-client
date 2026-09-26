@@ -7,6 +7,7 @@ import { parseThreadHtmlDocument } from "./email-html";
 import { listMailAttachments, withMailAttachments } from "./mail-attachments";
 import { applyExplicitSenderName, mailContactFrom, resolveMailSender } from "./mail-identity";
 import { findExecutable, runFile, runFileWithInput } from "./profile-process";
+import { isHeyAuthenticationFailure as authFailure } from "./hey-errors";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -108,11 +109,6 @@ function postingFrom(value: unknown): ImboxPosting {
     sender,
     visibleEntryCount: numberValue(posting.visible_entry_count, 1),
   };
-}
-
-function authFailure(error: unknown): boolean {
-  const detail = error instanceof Error ? error.message : String(error);
-  return /auth|log[ -]?in|unauthori[sz]ed|credential/i.test(detail);
 }
 
 export async function listImbox(env: NodeJS.ProcessEnv = process.env): Promise<ImboxResult> {
@@ -940,37 +936,18 @@ function findDraftId(payload: JsonRecord): string | undefined {
   return candidate === undefined ? undefined : stringValue(candidate);
 }
 
-export function addressedReplyDraftCommand(request: MailSendRequest): string[] {
-  if (request.mode !== "reply" || !/^\d+$/.test(request.topicId ?? "")) throw new Error("A valid HEY reply is required.");
-  const args = ["reply", request.topicId!];
-  for (const attachment of request.attachments) args.push("--attach", attachment);
-  args.push("--draft", "--json");
-  return args;
-}
-
 export async function sendMail(request: MailSendRequest, env: NodeJS.ProcessEnv = process.env): Promise<MailSendResult> {
   validateSendRequest(request);
   const executable = await findExecutable("hey", env);
   if (!executable) throw new Error("HEY CLI is unavailable.");
   const customReplyRecipients = request.mode === "reply" && [request.to, request.cc, request.bcc].some((value) => value !== undefined);
-  if (customReplyRecipients) {
-    const args = addressedReplyDraftCommand(request);
-    const { stdout } = await runFileWithInput(executable, args, request.body, { env, timeoutMs: 60_000 });
-    const draftId = findDraftId(parseJson(stdout));
-    if (!draftId) throw new Error("HEY created the addressed reply draft but did not return its ID.");
-    try {
-      const edited = await editDraft({ id: draftId, to: request.to, cc: request.cc, bcc: request.bcc }, env);
-      if (request.saveAsDraft) return { disposition: "draft", message: edited.message, draftId };
-      const sent = await sendDraft(draftId, env);
-      return { disposition: "sent", message: sent.message };
-    } catch (reason) {
-      const detail = reason instanceof Error ? reason.message : "HEY could not finish the addressed reply.";
-      throw new Error(`${detail} Check HEY Drafts before retrying; the reply was created there first.`);
-    }
-  }
+  // The composer sends the complete edited envelope. Additive overrides would
+  // silently restore recipients the user removed, so 1.7's replacement is required.
+  if (customReplyRecipients && ![request.to, request.cc, request.bcc].some((value) => value?.trim())) throw new Error("At least one reply recipient is required.");
   const args: string[] = request.mode === "compose"
     ? ["compose"]
     : [request.mode, request.topicId!];
+  if (customReplyRecipients) args.push("--replace-recipients");
   if (request.to?.trim()) args.push("--to", request.to.trim());
   if (request.cc?.trim()) args.push("--cc", request.cc.trim());
   if (request.bcc?.trim()) args.push("--bcc", request.bcc.trim());
@@ -1066,7 +1043,7 @@ export async function readThread(topicId: string, env: NodeJS.ProcessEnv = proce
     }),
     ...([...rich.entries()].some(([id, parsed]) => parsed.attachmentNames?.some((name) =>
       !thread.entries.find((entry) => entry.id === id)?.attachments?.some((file) => file.filename === name)))
-      ? { attachmentsError: thread.attachmentsError ?? "This message contains files that HEY CLI did not return. Update HEY CLI to 1.6.0 or newer, then reload. You can also open the conversation in HEY." } : {}),
+      ? { attachmentsError: thread.attachmentsError ?? "This message contains files that HEY CLI did not return. Run hey upgrade, then reload. You can also open the conversation in HEY." } : {}),
   };
 }
 

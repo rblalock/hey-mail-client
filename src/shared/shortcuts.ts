@@ -1,4 +1,4 @@
-import { DEFAULT_AI_SETTINGS, DEFAULT_SOUND_SETTINGS, type AppSettings, type ShortcutProfile } from "./contracts";
+import { DEFAULT_AI_SETTINGS, DEFAULT_SOUND_SETTINGS, DEFAULT_MAIL_CACHE_SETTINGS, type AppSettings, type ShortcutProfile } from "./contracts";
 import { matchesBindingStep, normalizeBindings, isShortcutEvent } from "./shortcut-binding";
 import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, type HelperId } from "./helpers";
 import { isNativeEditingBinding } from "./keyboard-scope";
@@ -93,6 +93,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   version: 1,
   interfaceFont: "instrument",
   showSenderAvatars: false,
+  mailCache: DEFAULT_MAIL_CACHE_SETTINGS,
   shortcutProfile: "hey",
   customShortcuts: {},
   sound: DEFAULT_SOUND_SETTINGS,

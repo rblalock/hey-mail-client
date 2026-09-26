@@ -67,7 +67,7 @@ export async function checkEmailEscape({ evaluate, until, click, fill, press }) 
   await evaluate('document.activeElement.blur()'); await press('2');
   const togetherId = await evaluate("document.querySelector('.mail-row').dataset.postingId");
   await click('.mail-row [data-bulk-toggle]');
-  await click('.mail-row:nth-child(2) [data-bulk-toggle]');
+  await evaluate("document.querySelectorAll('.mail-row')[1].querySelector('[data-bulk-toggle]').click()");
   await click('[data-tooltip="Read Together"]');
   await escapeFrame(); await checkReturn('.mail-row', togetherId);
   await press('Escape'); // clear bulk selection
@@ -84,10 +84,10 @@ export async function checkEmailEscape({ evaluate, until, click, fill, press }) 
   await evaluate("[...document.querySelectorAll('nav button')].find(button => button.textContent === 'Library').click()");
   await until("Boolean(document.querySelector('.library-contact-row'))");
   await click('.library-contact-row');
-  await until("Boolean(document.querySelector('.contact-conversations [data-posting-id]'))");
-  const contactId = await evaluate("document.querySelector('.contact-conversations [data-posting-id]').dataset.postingId");
-  await click('.contact-conversations [data-posting-id]');
-  await escapeFrame(); await checkReturn('.contact-conversations button', contactId);
+  await until("Boolean(document.querySelector('.library-conversations [data-posting-id]'))");
+  const contactId = await evaluate("document.querySelector('.library-conversations [data-posting-id]').dataset.postingId");
+  await click('.library-conversations [data-posting-id]');
+  await escapeFrame(); await checkReturn('.library-conversations button', contactId);
 
   // Bundle listings remount when their individual reader closes.
   await evaluate(`(() => {

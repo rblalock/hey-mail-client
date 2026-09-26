@@ -106,9 +106,9 @@ export async function checkListNavigation({ window, url, evaluate, until, click,
   await press('Escape');
   await evaluate("[...document.querySelectorAll('nav button')].find(button=>button.textContent==='Library').click()");
   await until("Boolean(document.querySelector('.library-contact-row'))"); await click('.library-contact-row');
-  await until("document.querySelectorAll('.contact-conversations [data-posting-id]').length >= 2");
+  await until("document.querySelectorAll('.library-conversations [data-posting-id]').length >= 2");
   for (const index of [1, 2]) {
-    await focus(`.contact-conversations [data-posting-id]:nth-child(${index})`);
+    await focus(`.library-conversations [data-posting-id]:nth-child(${index})`);
     const subject = await evaluate("document.activeElement.querySelector('strong').textContent");
     await enter(); await until(`document.querySelector('.thread-panel h1')?.textContent === ${JSON.stringify(subject)}`);
     await back();

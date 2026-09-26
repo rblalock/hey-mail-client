@@ -1,4 +1,4 @@
-import { DEFAULT_SOUND_SETTINGS, type AgentWorkspace, type AppSettings, type CalendarEvent, type CalendarHabit, type CalendarJournalEntry, type CalendarSummary, type CalendarTimeCategory, type CalendarTimeTrack, type CalendarTodo, type HeyAgentApi, type ImboxPosting, type MailDraft, type ScreenerEntry, type ThemeSnapshot } from "../../shared/contracts";
+import { DEFAULT_SOUND_SETTINGS, DEFAULT_MAIL_CACHE_SETTINGS, type AgentWorkspace, type AppSettings, type CalendarEvent, type CalendarHabit, type CalendarJournalEntry, type CalendarSummary, type CalendarTimeCategory, type CalendarTimeTrack, type CalendarTodo, type HeyAgentApi, type ImboxPosting, type MailDraft, type ScreenerEntry, type ThemeSnapshot } from "../../shared/contracts";
 import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, helperById, isCustomHelperId, type HelperId } from "../../shared/helpers";
 import { addDays, eventOccursOn } from "./calendar";
 import { DeferredTrash } from "../../shared/deferred-trash";
@@ -142,7 +142,7 @@ export function previewApi(): HeyAgentApi {
     accounts.splice(1);
   }
   const account = accounts.find((item) => item.key === localStorage.getItem("preview-profile")) ?? accounts[0]!;
-  let settings: AppSettings = { version: 1, showSenderAvatars: false, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: { catalogVersion: HELPER_CATALOG_VERSION, enabled: [...DEFAULT_ENABLED_HELPERS] } };
+  let settings: AppSettings = { version: 1, showSenderAvatars: false, mailCache: { ...DEFAULT_MAIL_CACHE_SETTINGS }, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: { catalogVersion: HELPER_CATALOG_VERSION, enabled: [...DEFAULT_ENABLED_HELPERS] } };
   let mailDrafts: MailDraft[] = [{ id: "draft-1", subject: "Launch follow-up", to: "maya@example.com", cc: "", bcc: "", body: "Hi Maya,\n\nThe revised sequence looks good. I have one final question about Friday.", updatedAt: "2026-09-03T18:10:00-04:00" }];
   let calendarEvents = structuredClone(previewEvents);
   let calendarTodos: CalendarTodo[] = [
@@ -321,6 +321,7 @@ export function previewApi(): HeyAgentApi {
         cc: [],
         bcc: [],
       }),
+      readCachedThread: async () => undefined,
       readThread: async (topicId) => ({
         topicId,
         subject: postings.find((posting) => posting.topicId === topicId)?.subject ?? "Conversation",
@@ -507,9 +508,11 @@ export function previewApi(): HeyAgentApi {
           else customShortcuts[shortcutEdit.id] = shortcutEdit.bindings;
           validateCustomShortcuts(customShortcuts);
         }
-        settings = { ...settings, ...update, customShortcuts, sound: { ...settings.sound, ...update.sound }, ai: { ...settings.ai, ...update.ai }, helpers: { ...settings.helpers, ...update.helpers }, version: 1, shortcutProfile: update.shortcutProfile ?? settings.shortcutProfile }; return settings;
+        settings = { ...settings, ...update, customShortcuts, mailCache: { ...settings.mailCache, ...update.mailCache }, sound: { ...settings.sound, ...update.sound }, ai: { ...settings.ai, ...update.ai }, helpers: { ...settings.helpers, ...update.helpers }, version: 1, shortcutProfile: update.shortcutProfile ?? settings.shortcutProfile }; return settings;
       },
-      reset: async () => { settings = { version: 1, showSenderAvatars: false, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: settings.helpers }; return settings; },
+      reset: async () => { settings = { version: 1, showSenderAvatars: false, mailCache: { ...DEFAULT_MAIL_CACHE_SETTINGS }, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: settings.helpers }; return settings; },
+      mailCacheStats: async () => ({ entries: 0, bytes: 0 }),
+      clearMailCache: async () => undefined,
     },
     writing: {
       listModels: async (_refresh) => [

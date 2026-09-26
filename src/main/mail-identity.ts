@@ -46,7 +46,7 @@ export function mailContactFrom(value: unknown): MailContact {
   const initials = contactInitials(item.initials);
   return {
     ...(item.id === undefined ? {} : { id: stringValue(item.id) }),
-    name: stringValue(item.name, stringValue(item.email_address, stringValue(item.email, "Unknown sender"))),
+    name: cleanName(item.name) ?? cleanName(item.email_address) ?? cleanName(item.email) ?? "Unknown sender",
     ...(item.email_address === undefined && item.email === undefined ? {} : { email: stringValue(item.email_address, stringValue(item.email)) }),
     ...(item.contactable_type === undefined && item.kind === undefined ? {} : { kind: stringValue(item.contactable_type, stringValue(item.kind)) }),
     ...(avatarUrl ? { avatarUrl } : {}),
@@ -86,6 +86,9 @@ export function resolveMailSender(itemValue: unknown, options: ResolveMailSender
   const item = record(itemValue);
   const raw = record(item.sender ?? item.creator ?? item.contact);
   const direct = Object.keys(raw).length > 0 ? mailContactFrom(raw) : undefined;
+  // CLI 1.7 preserves the actual send-as address separately from the account
+  // creator. Do not replace its identity with the creator/relay's display name.
+  if (item.sender && direct?.email) return direct;
   const summary = options.summary ?? "";
   const subject = options.subject ?? "";
   const explicitActor = cleanName(options.explicitName) ?? cleanName(item.alternative_sender_name);
@@ -100,6 +103,9 @@ export function resolveMailSender(itemValue: unknown, options: ResolveMailSender
 }
 
 export function applyExplicitSenderName(sender: MailContact, explicitName: string | undefined): MailContact {
-  const name = cleanName(explicitName);
+  const display = cleanName(explicitName);
+  const addressed = display?.match(/^(.*?)\s*<([^<>]+)>$/);
+  const name = addressed && sender.email?.toLowerCase() === addressed[2]!.trim().toLowerCase()
+    ? cleanName(addressed[1]) ?? sender.name : display;
   return name ? { ...sender, name } : sender;
 }

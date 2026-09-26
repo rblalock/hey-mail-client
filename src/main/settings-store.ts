@@ -2,13 +2,14 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { normalizeBindings } from "../shared/shortcut-binding";
 import { validateCustomShortcuts } from "../shared/shortcuts";
-import { AGENT_THINKING_LEVELS, DEFAULT_AI_SETTINGS, DEFAULT_SOUND_SETTINGS, SOUND_PACKS, isInterfaceFont, type AgentModelProfile, type AiSettings, type AppSettings, type AppSettingsUpdate, type HelperSettings, type ShortcutProfile, type SoundSettings } from "../shared/contracts";
+import { AGENT_THINKING_LEVELS, DEFAULT_AI_SETTINGS, DEFAULT_SOUND_SETTINGS, DEFAULT_MAIL_CACHE_SETTINGS, SOUND_PACKS, isInterfaceFont, type AgentModelProfile, type AiSettings, type AppSettings, type AppSettingsUpdate, type MailCacheSettings, type HelperSettings, type ShortcutProfile, type SoundSettings } from "../shared/contracts";
 import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, customHelpersError, isHelperId, type CustomHelper } from "../shared/helpers";
 
 const DEFAULT_SETTINGS: AppSettings = {
   version: 1,
   interfaceFont: "instrument",
   showSenderAvatars: false,
+  mailCache: DEFAULT_MAIL_CACHE_SETTINGS,
   shortcutProfile: "hey",
   customShortcuts: {},
   sound: DEFAULT_SOUND_SETTINGS,
@@ -97,11 +98,22 @@ function normalize(value: unknown): AppSettings {
     version: 1,
     interfaceFont: isInterfaceFont(item.interfaceFont) ? item.interfaceFont : DEFAULT_SETTINGS.interfaceFont,
     showSenderAvatars: item.showSenderAvatars === true,
+    mailCache: normalizeMailCache(item.mailCache),
     shortcutProfile: isProfile(item.shortcutProfile) ? item.shortcutProfile : DEFAULT_SETTINGS.shortcutProfile,
     customShortcuts: normalizeShortcuts(item.customShortcuts),
     sound: normalizeSound(item.sound),
     ai: normalizeAi(item.ai),
     helpers: normalizeHelpers(item.helpers),
+  };
+}
+
+function normalizeMailCache(value: unknown): MailCacheSettings {
+  const item = value && typeof value === "object" ? value as Partial<MailCacheSettings> : {};
+  return {
+    enabled: item.enabled === true,
+    maxSizeMb: [50, 100, 250].includes(item.maxSizeMb!) ? item.maxSizeMb! : DEFAULT_MAIL_CACHE_SETTINGS.maxSizeMb,
+    retentionDays: [1, 7, 30].includes(item.retentionDays!) ? item.retentionDays! : DEFAULT_MAIL_CACHE_SETTINGS.retentionDays,
+    prefetch: typeof item.prefetch === "boolean" ? item.prefetch : DEFAULT_MAIL_CACHE_SETTINGS.prefetch,
   };
 }
 
@@ -137,6 +149,7 @@ export class SettingsStore {
         ...current,
         ...(update.interfaceFont === undefined ? {} : { interfaceFont: update.interfaceFont }),
         ...(update.showSenderAvatars === undefined ? {} : { showSenderAvatars: update.showSenderAvatars }),
+        ...(update.mailCache === undefined ? {} : { mailCache: { ...current.mailCache, ...update.mailCache } }),
         ...(update.shortcutProfile === undefined ? {} : { shortcutProfile: update.shortcutProfile }),
         customShortcuts,
         ...(update.sound === undefined ? {} : { sound: { ...current.sound, ...update.sound } }),

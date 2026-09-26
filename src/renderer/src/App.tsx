@@ -144,6 +144,7 @@ export default function App() {
   const requestSequence = useRef<Partial<Record<MailboxKey, number>>>({});
   const listingRequestSequence = useRef(0);
   const threadCache = useRef(new MailThreadCache(10)).current;
+  const prefetchBusy = useRef(false);
   const readTogetherRef = useRef<ReadTogetherHandle>(null);
   const readTogetherThreadsRef = useRef<Record<string, MailThread | undefined>>({});
   const visibleTopicIds = useRef<Set<string>>(new Set());
@@ -233,13 +234,9 @@ export default function App() {
     }
   }, []);
 
-  const refresh = useCallback(async () => {
-    if (activeMailbox) await refreshMailbox(activeMailbox);
-  }, [activeMailbox, refreshMailbox]);
-
   const loadThread = useCallback(async (topicId: string, options: { force?: boolean; reportError?: boolean } = {}): Promise<MailThread | undefined> => {
     const cached = !options.force ? threadCache.get(topicId) : undefined;
-    if (cached) return cached;
+    if (cached && threadCache.isFresh(topicId)) return cached;
     if (options.reportError) {
       setThreadErrors((current) => {
         if (!(topicId in current)) return current;
@@ -249,19 +246,48 @@ export default function App() {
       });
     }
     try {
-      const thread = await threadCache.read(topicId, (id) => window.heyAgent.mail.readThread(id), options.force);
+      const thread = await threadCache.read(topicId, (id) => window.heyAgent.mail.readThread(id), options.force,
+        (id) => window.heyAgent.mail.readCachedThread(id),
+        (preview) => {
+          setThreadCacheRevision((value) => value + 1);
+          if (visibleTopicIds.current.has(topicId)) setReadTogetherThreads((current) => ({ ...current, [topicId]: preview }));
+        });
+      // An invalidated request may finish after its replacement. Never let its
+      // returned value overwrite Read Together's independently rendered map.
+      if (threadCache.get(topicId) !== thread) return undefined;
       setThreadCacheRevision((value) => value + 1);
+      setThreadErrors((current) => {
+        if (!(topicId in current)) return current;
+        const next = { ...current };
+        delete next[topicId];
+        return next;
+      });
       return thread;
     } catch (reason) {
-      if (options.reportError) {
+      if (options.reportError && !threadCache.isFresh(topicId)) {
         setThreadErrors((current) => ({
           ...current,
-          [topicId]: reason instanceof Error ? reason.message : "Unable to read this conversation.",
+          [topicId]: `${threadCache.get(topicId) ? "Showing a cached copy. " : ""}${reason instanceof Error ? reason.message : "Unable to read this conversation."}`,
         }));
       }
       return undefined;
     }
   }, [threadCache]);
+
+  const prefetchThread = useCallback(async (topicId: string) => {
+    if (prefetchBusy.current) return;
+    prefetchBusy.current = true;
+    try { await loadThread(topicId); }
+    finally { prefetchBusy.current = false; }
+  }, [loadThread]);
+
+  const refresh = useCallback(async () => {
+    if (selected?.topicId) {
+      threadCache.invalidate(selected.topicId, true);
+      void loadThread(selected.topicId, { force: true, reportError: true });
+    }
+    if (activeMailbox) await refreshMailbox(activeMailbox);
+  }, [activeMailbox, refreshMailbox, selected?.topicId, threadCache, loadThread]);
 
   const loadThreadListing = useCallback(async (kind: MailThreadListing["kind"], id: string, preserve = false) => {
     const sequence = ++listingRequestSequence.current;
@@ -314,18 +340,35 @@ export default function App() {
       if (!loaded || cancelled) return;
       const postings = mailbox?.postings ?? [];
       const index = postings.findIndex((posting) => posting.id === selected.id);
-      for (const neighbor of [postings[index - 1], postings[index + 1]]) {
-        if (neighbor?.topicId) void loadThread(neighbor.topicId);
+      // Opt-in background work, one neighbor at a time. Detached search/library
+      // readers must never prefetch an unrelated mailbox's first item.
+      if (settings.mailCache.enabled && settings.mailCache.prefetch && !readerOrigin && index >= 0) {
+        void (async () => {
+          for (const neighbor of [postings[index + 1], postings[index - 1]]) {
+            if (cancelled) return;
+            if (neighbor?.topicId) await prefetchThread(neighbor.topicId);
+          }
+        })();
       }
     });
     return () => { cancelled = true; };
-  }, [loadThread, mailbox, selected?.id, selected?.topicId]);
+  }, [loadThread, prefetchThread, mailbox, selected?.id, selected?.topicId, readerOrigin, settings.mailCache.enabled, settings.mailCache.prefetch]);
+
+  // Start warming the keyboard-highlighted row before Enter, without opening an
+  // iframe or marking mail seen. Debouncing skips rows passed during key repeat.
+  useEffect(() => {
+    if (!settings.mailCache.enabled || !settings.mailCache.prefetch || selected || readTogether || threadListing || searchOpen) return;
+    const posting = mailbox?.postings.find((item) => item.id === highlightedId);
+    if (!posting?.topicId || posting.kind === "bundle") return;
+    const timer = setTimeout(() => void prefetchThread(posting.topicId!), 200);
+    return () => clearTimeout(timer);
+  }, [highlightedId, mailbox, prefetchThread, selected, readTogether, threadListing, searchOpen, settings.mailCache.enabled, settings.mailCache.prefetch]);
 
   useEffect(() => {
     if (!readTogether) return;
     let cancelled = false;
     let cursor = 0;
-    const topics = readTogetherPostings.flatMap((posting) => posting.topicId && !readTogetherThreadsRef.current[posting.topicId] ? [posting.topicId] : []);
+    const topics = readTogetherPostings.flatMap((posting) => posting.topicId && (!readTogetherThreadsRef.current[posting.topicId] || !threadCache.isFresh(posting.topicId)) ? [posting.topicId] : []);
     const loadNext = async () => {
       while (!cancelled) {
         const topicId = topics[cursor];
@@ -337,7 +380,7 @@ export default function App() {
     };
     void Promise.all(Array.from({ length: Math.min(3, topics.length) }, loadNext));
     return () => { cancelled = true; };
-  }, [loadThread, readTogether, readTogetherPostings]);
+  }, [loadThread, readTogether, readTogetherPostings, threadCache]);
 
   useEffect(() => {
     if (!activeMailbox || !mailbox?.postings.length) return;
@@ -348,11 +391,13 @@ export default function App() {
 
   useEffect(() => {
     const timers = new Map<MailboxKey, ReturnType<typeof setTimeout>>();
+    let disposed = false;
+    let resyncVersion = 0;
     const unsubscribe = window.heyAgent.mail.subscribe((change) => {
       if (change.change === "added" && change.isNew && document.hidden) appSound.play("notification", "notification");
       if (change.topicId) {
         if (!reconciliationSequences.current.has(change.topicId)) {
-          threadCache.invalidate(change.topicId);
+          threadCache.invalidate(change.topicId, true);
           setThreadCacheRevision((value) => value + 1);
           if (visibleTopicIds.current.has(change.topicId)) {
             void loadThread(change.topicId, { force: true, reportError: true }).then((thread) => {
@@ -361,6 +406,22 @@ export default function App() {
           }
         }
       }
+      if (change.change === "resync") {
+        threadCache.invalidate(undefined, true, reconciliationSequences.current.keys());
+        const version = ++resyncVersion;
+        const topics = [...visibleTopicIds.current].filter((id) => !reconciliationSequences.current.has(id));
+        let cursor = 0;
+        const next = async () => {
+          while (!disposed && version === resyncVersion) {
+            const id = topics[cursor++];
+            if (!id) return;
+            const thread = await loadThread(id, { force: true, reportError: true });
+            if (!disposed && thread && visibleTopicIds.current.has(id)) setReadTogetherThreads((current) => ({ ...current, [id]: thread }));
+          }
+        };
+        void Promise.all(Array.from({ length: Math.min(3, topics.length) }, next));
+        for (const box of MAILBOX_KEYS) void refreshMailbox(box);
+      }
       if (!change.box) return;
       const box = change.box.key as MailboxKey;
       if (!MAILBOX_KEYS.includes(box)) return;
@@ -368,7 +429,7 @@ export default function App() {
       if (current) clearTimeout(current);
       timers.set(box, setTimeout(() => void refreshMailbox(box), 120));
     });
-    return () => { for (const timer of timers.values()) clearTimeout(timer); unsubscribe(); };
+    return () => { disposed = true; for (const timer of timers.values()) clearTimeout(timer); unsubscribe(); };
   }, [loadThread, refreshMailbox, threadCache]);
 
   useEffect(() => {
@@ -1126,6 +1187,7 @@ export default function App() {
     setNotice({ message: result.message });
     if (result.disposition === "sent") {
       const previous = threadCache.get(topicId);
+      threadCache.invalidate(topicId, true);
       if (previous) {
         const sequence = (reconciliationSequences.current.get(topicId) ?? 0) + 1;
         reconciliationSequences.current.set(topicId, sequence);
@@ -1154,7 +1216,7 @@ export default function App() {
         void loadThread(topicId, { force: true, reportError: true });
       }
     }
-    void refresh();
+    if (activeMailbox) void refreshMailbox(activeMailbox);
   };
 
   const chatAboutContact = (contact: MailContactDetail) => {

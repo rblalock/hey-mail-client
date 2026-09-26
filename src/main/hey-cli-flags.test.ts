@@ -39,6 +39,8 @@ describe("HEY bridge argv grammar", () => {
     expect(parseHeyArgs(["compose", "--draft", "--draft=false"]).has("--draft")).toBe(false);
     expect(parseHeyArgs(["journal", "write", "-c=--help"]).values("--content")).toEqual(["--help"]);
     expect(parseHeyArgs(["event", "add", "-t", "--json"]).has("--json")).toBe(false);
+    expect(parseHeyArgs(["reply", "42", "--dry-run", "--dry-run=false"]).has("--dry-run")).toBe(false);
+    expect(parseHeyArgs(["reply", "42", "--replace-recipients=false", "--replace-recipients"]).has("--replace-recipients")).toBe(true);
   });
   it.each([["--future-option", "--help"], ["-mh"], ["--content"], ["--draft=maybe"]])("rejects unsupported or incomplete syntax %j", (...args) => {
     expect(() => parseHeyArgs(["compose", ...args])).toThrow(/Unsupported|Missing|Invalid/);

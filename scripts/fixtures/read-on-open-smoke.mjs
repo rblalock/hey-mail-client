@@ -26,6 +26,13 @@ export async function checkReadOnOpen({ evaluate, until, click, press }) {
     };
   })()`);
 
+  assert.equal(await evaluate('window.heyAgent.settings.get().then(s => s.mailCache.enabled)'), false, 'persistent cache and prefetch require opt-in');
+  await click('[aria-label="Profile options"]');
+  await click('[role="menuitem"]');
+  await click('[aria-controls="settings-mail-content"]');
+  await click('[aria-label="Keep a local mail cache"]');
+  await until('window.heyAgent.settings.get().then(s => s.mailCache.enabled && s.mailCache.prefetch)');
+
   for (const [key, box, title] of [['2', 'feedbox', 'The Feed'], ['3', 'trailbox', 'Paper Trail'], ['1', 'imbox', 'Inbox'], ['4', 'laterbox', 'Reply Later'], ['5', 'asidebox', 'Set Aside'], ['6', 'bubblebox', 'Bubble Up']]) {
     await evaluate('document.activeElement.blur()');
     await press(key);

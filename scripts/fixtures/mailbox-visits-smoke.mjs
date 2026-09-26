@@ -32,7 +32,7 @@ export async function checkMailboxVisits({ window, evaluate, until, click, fill,
   await until(`Boolean(${divider})`);
   const second = await stored();
   assert.notEqual(first, second);
-  assert.equal(await evaluate(`Array.from(${divider}.parentElement.children).indexOf(${divider})`), 2);
+  assert.equal(await evaluate(`Array.from(${divider}.parentElement.children).slice(0, Array.from(${divider}.parentElement.children).indexOf(${divider})).filter(node => node.matches('.mail-row')).length`), 2, "two new conversations precede the boundary; day headings do not count as mail");
   await evaluate("window.visitNow+=2000");
   await click('[aria-label="Refresh Paper Trail"]');
   await until("!document.querySelector('[aria-label=\"Refresh Paper Trail\"]').disabled");

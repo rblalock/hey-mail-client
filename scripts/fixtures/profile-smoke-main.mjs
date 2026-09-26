@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, clipboard } from "electron";
@@ -7,7 +7,10 @@ const scratch = process.env.HEY_AGENT_PROFILE_SMOKE_ROOT;
 if (!scratch?.includes("/hey-profile-smoke-")) throw new Error("Disposable test roots required.");
 const root = fileURLToPath(new URL("../../", import.meta.url));
 app.getAppPath = () => root;
-app.on("browser-window-created", (_event, window) => { window.show = () => {}; });
+app.on("browser-window-created", (_event, window) => {
+  window.webContents.setAudioMuted(true);
+  window.show = () => {};
+});
 const handlers = new Map();
 const register = ipcMain.handle.bind(ipcMain);
 ipcMain.handle = (channel, fn) => { handlers.set(channel, fn); register(channel, fn); };
@@ -33,6 +36,27 @@ app.whenReady().then(async () => {
     };
     const [first, second] = initial.accounts;
     await switchTo(first.key);
+    assert.equal(window.webContents.isAudioMuted(), true);
+    const cacheRoot = join(scratch, "state", "hey-agent-app", "mail-cache");
+    const cacheFiles = async () => (await readdir(cacheRoot).catch((error) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    })).filter((name) => name.endsWith(".json"));
+    assert.deepEqual((await evaluate("window.heyAgent.settings.get()")).mailCache, { enabled: false, prefetch: true, maxSizeMb: 100, retentionDays: 7 });
+    await evaluate("window.heyAgent.mail.listMailbox('imbox')");
+    assert.equal((await evaluate("window.heyAgent.mail.readThread('103')")).entries[0].body, "Synthetic mail body for 101");
+    assert.deepEqual(await evaluate("window.heyAgent.settings.mailCacheStats()"), { entries: 0, bytes: 0 });
+    assert.deepEqual(await cacheFiles(), []);
+    await evaluate("window.heyAgent.settings.update({mailCache:{enabled:true,maxSizeMb:50,retentionDays:1}})");
+    assert.deepEqual(JSON.parse(await readFile(join(scratch, "config", "hey-agent-app", "settings.json"), "utf8")).mailCache, { enabled: true, prefetch: true, maxSizeMb: 50, retentionDays: 1 });
+    // The same synthetic topic exists in both accounts, but is not visible to list prefetch.
+    await evaluate("window.heyAgent.mail.search({query:'shared'})");
+    assert.equal((await evaluate("window.heyAgent.mail.readThread('777')")).entries[0].body, "Synthetic mail body for 101");
+    assert.equal((await evaluate("window.heyAgent.mail.readCachedThread('777')")).entries[0].body, "Synthetic mail body for 101");
+    const firstCache = JSON.parse(await readFile(join(cacheRoot, `${first.key}-777.json`), "utf8"));
+    assert.equal(firstCache.accountId, "101");
+    assert.equal(firstCache.thread.entries[0].body, "Synthetic mail body for 101");
+    assert.ok(firstCache.cachedAt > 0);
     // Prove the shipped file:// renderer can load Pierre's lazy comparison chunks.
     // Only generation is stubbed; main/preload and the production UI stay real.
     const writingHandler = handlers.get("writing:generate");
@@ -94,6 +118,11 @@ app.whenReady().then(async () => {
     assert.equal((await evaluate("window.heyAgent.agent.listChats()")).some((chat) => chat.id === workspace.activeTabId), false);
     const mail = await evaluate("window.heyAgent.mail.listMailbox('imbox')");
     assert.equal(mail.postings[0].subject, "Mail for 202");
+    await evaluate("window.heyAgent.mail.search({query:'shared'})");
+    assert.equal(await evaluate("window.heyAgent.mail.readCachedThread('777')"), undefined);
+    assert.equal((await evaluate("window.heyAgent.mail.readThread('777')")).entries[0].body, "Synthetic mail body for 202");
+    assert.equal((await evaluate("window.heyAgent.mail.readCachedThread('777')")).entries[0].body, "Synthetic mail body for 202");
+    assert.equal(JSON.parse(await readFile(join(cacheRoot, `${second.key}-777.json`), "utf8")).accountId, "202");
     await assert.rejects(() => evaluate("window.heyAgent.mail.readThread('103')"), /not been verified/);
     const secondToken = await evaluate("window.heyAgent.profiles.current.token");
     const send = handlers.get("mail:send")(event(), secondToken, { mode: "compose", to: "synthetic@example.com", subject: "Fixture", body: "No live mail", attachments: [] });
@@ -104,6 +133,18 @@ app.whenReady().then(async () => {
     await evaluate("window.heyAgent.profiles.acknowledgeWrites()");
     await switchTo(first.key);
     assert.equal((await evaluate("window.heyAgent.agent.listChats()")).some((chat) => chat.id === workspace.activeTabId), true);
+    assert.equal((await evaluate("window.heyAgent.mail.readCachedThread('777')")).entries[0].body, "Synthetic mail body for 101");
+    await evaluate("window.heyAgent.settings.clearMailCache()");
+    assert.deepEqual(await evaluate("window.heyAgent.settings.mailCacheStats()"), { entries: 0, bytes: 0 });
+    assert.deepEqual(await cacheFiles(), []);
+    await evaluate("window.heyAgent.mail.search({query:'shared'})");
+    await evaluate("window.heyAgent.mail.readThread('777')");
+    assert.ok((await evaluate("window.heyAgent.settings.mailCacheStats()")).bytes > 0);
+    await evaluate("window.heyAgent.settings.update({mailCache:{enabled:false}})");
+    assert.equal(await evaluate("window.heyAgent.mail.readCachedThread('777')"), undefined);
+    assert.deepEqual(await evaluate("window.heyAgent.settings.mailCacheStats()"), { entries: 0, bytes: 0 });
+    assert.deepEqual(await cacheFiles(), []);
+    console.log("PASS: real main/preload cache is off by default, persists opt-in settings and private thread files, isolates identical topic IDs across accounts and renderer reloads, and deletes every cached profile on clear or disable. Hidden test contents remain muted.");
     const calls = (await readFile(join(scratch, "hey-calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
     for (const args of calls.filter((args) => !["auth", "account", "--version"].includes(args[0]))) assert.ok(args[0] === "--account" && ["101", "202"].includes(args[1]), JSON.stringify(args));
     assert.equal(calls.some((args) => args.includes("use")), false);

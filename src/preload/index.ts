@@ -35,6 +35,7 @@ const api: HeyAgentApi = {
     deleteDraft: (id) => invoke("mail:delete-draft", id),
     getReplyContext: (postingId) => invoke("mail:reply-context", postingId),
     readThread: (topicId) => invoke("mail:read-thread", topicId),
+    readCachedThread: (topicId) => invoke("mail:read-cached-thread", topicId),
     openAttachment: (topicId, attachmentId) => invoke("mail:open-attachment", topicId, attachmentId),
     previewCalendarInvite: (topicId, attachmentId) => invoke("mail:preview-calendar-invite", topicId, attachmentId),
     saveAttachment: (topicId, attachmentId) => invoke("mail:save-attachment", topicId, attachmentId),
@@ -92,6 +93,8 @@ const api: HeyAgentApi = {
     get: () => invoke("settings:get"),
     update: (update) => invoke("settings:update", update),
     reset: () => invoke("settings:reset"),
+    mailCacheStats: () => invoke("settings:mail-cache-stats"),
+    clearMailCache: () => invoke("settings:clear-mail-cache"),
   },
   writing: {
     listModels: (refresh) => invoke("writing:list-models", refresh),

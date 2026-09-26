@@ -2,6 +2,7 @@ import type { CalendarSearchItem, CalendarSearchKind, CalendarSearchRequest, Cal
 import { findExecutable, runFile } from "./profile-process";
 import { calendarListCommand, parseCalendarWindow } from "./hey-calendar";
 import { parseJournalEntries, parseTimeTracks, parseTodos } from "./hey-calendar-recordings";
+import { isHeyAuthenticationFailure as authFailure } from "./hey-errors";
 
 type SourceRead = { kind: CalendarSearchKind; items: CalendarSearchItem[] };
 
@@ -13,10 +14,6 @@ export const calendarSearchCommands = {
   journal: ["journal", "list", "--all", "--json"],
   time: ["timetrack", "list", "--all", "--json"],
 } as const;
-
-function authFailure(error: unknown): boolean {
-  return /auth|login|credential|token|unauthorized|forbidden/i.test(error instanceof Error ? error.message : String(error));
-}
 
 function matches(query: string, values: Array<string | undefined>): boolean {
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);

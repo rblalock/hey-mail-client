@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell, type IpcMainInvokeEvent } from "electron";
 import { ComposerFiles, clipboardFilePaths } from "./composer-attachments";
 import type {
-  AgentAttachment, AgentUiResponse, BulkReplySendRequest, ComposerWritingRequest, MailDraftUpdate, MailMutationRequest, MailSendRequest,
+  AgentAttachment, AgentUiResponse, BulkReplySendRequest, ComposerWritingRequest, MailDraftUpdate, MailMutationRequest, MailSendRequest, AppSettings,
   MailboxKey, MailLibraryKind, MailOrganizationMutationRequest, MailOrganizationTarget, MailSearchRequest, NewAgentSessionRequest, ScreenerDecisionRequest, SetAsideGroupMutationRequest,
 } from "../shared/contracts";
 import { helperAcceptsContextCount, helperById, isHelperId } from "../shared/helpers";
@@ -21,6 +21,8 @@ import { resolveAppPaths } from "./paths";
 import { probeRuntimes } from "./runtime";
 import { SettingsStore } from "./settings-store";
 import { updateSettingsFromIpc } from "./settings-update";
+import { MailDiskCache } from "./mail-disk-cache";
+import { CachedMailReader } from "./cached-mail-reader";
 import { PiWritingService } from "./pi-writing";
 import { desktopRuntimePath } from "./process";
 import { currentTheme } from "./theme";
@@ -58,6 +60,12 @@ app.on("second-instance", () => {
   mainWindow?.focus();
 });
 const settingsStore = new SettingsStore(join(paths.config, "settings.json"));
+const mailDiskCache = new MailDiskCache(join(paths.state, "mail-cache"));
+const cachedMailReader = new CachedMailReader(mailDiskCache, (topicId) => readThread(topicId, process.env, { includeHtml: true }));
+async function configureMailCache(settings: AppSettings): Promise<AppSettings> {
+  await mailDiskCache.configure({ enabled: settings.mailCache.enabled, maxBytes: settings.mailCache.maxSizeMb * 1024 * 1024, retentionMs: settings.mailCache.retentionDays * 86_400_000 });
+  return settings;
+}
 const writing = new PiWritingService(paths.workspace, process.env);
 const piExtensionPath = app.isPackaged ? join(process.resourcesPath, "hey-agent-pi-extension.mjs") : join(app.getAppPath(), "resources", "hey-agent-pi-extension.mjs");
 const helperRoot = app.isPackaged ? join(process.resourcesPath, "helpers") : join(app.getAppPath(), "resources", "helpers");
@@ -97,7 +105,14 @@ function bindProfile(): void {
   const profileAgent = agent;
   handoffs = new AgentHandoffs(profile, (tabId) => profileAgent.handoffSnapshot(tabId), env);
   agent.subscribe((workspace) => { if (profiles.state.token === token) mainWindow?.webContents.send("agent:changed", workspace); });
-  heyWatcher = new HeyWatcher((change) => { if (profiles.state.token === token) mainWindow?.webContents.send("mail:changed", change); }, env);
+  heyWatcher = new HeyWatcher((change) => {
+    if (profiles.state.token !== token) return;
+    // Invalidate before the renderer can start a replacement fetch. In-flight
+    // requests from before this event cannot repopulate the disk cache.
+    if (change.topicId) void mailDiskCache.remove(profile, change.topicId).catch(() => undefined);
+    else if (change.change === "resync" || change.change === "deleted") void mailDiskCache.clearProfile(profile).catch(() => undefined);
+    mainWindow?.webContents.send("mail:changed", change);
+  }, env);
   void heyWatcher.start();
 }
 
@@ -121,6 +136,9 @@ function handle(channel: string, action: (event: IpcMainInvokeEvent, ...args: un
     if (!readOnly) pendingWrites++;
     try {
       const result = await profileRequest.run(accountContext, () => action(event, ...args));
+      if (/^mail:(send|send-draft|bulk-reply-send|bulk-reply-undo)$/.test(channel)) {
+        await mailDiskCache.clearProfile(profiles.state.active!).catch(() => undefined);
+      }
       profiles.assertToken(token);
       return result;
     } finally { if (!readOnly) pendingWrites--; }
@@ -220,9 +238,9 @@ function registerIpc(): void {
     return decideScreener(request);
   });
   handle("mail:read-thread", (_event, topicId) => {
-    if (typeof topicId !== "string") throw new Error("A HEY topic ID is required.");
-    return readThread(topicId, process.env, { includeHtml: true });
+    return cachedMailReader.read(profiles.state.active!, assertNumericId(topicId, "topic"));
   });
+  handle("mail:read-cached-thread", (_event, topicId) => cachedMailReader.cached(profiles.state.active!, assertNumericId(topicId, "topic")));
   handle("mail:open-attachment", async (_event, topicId, attachmentId) => {
     const file = await resolveMailAttachment(topicId, attachmentId);
     if (!canOpenMailAttachment(file)) throw new Error("Save this file to inspect it before opening it.");
@@ -244,14 +262,21 @@ function registerIpc(): void {
     await saveMailAttachment(file, choice.filePath);
     return { cancelled: false };
   });
-  handle("mail:mutate", (_event, request) => {
+  handle("mail:mutate", async (_event, request) => {
     if (!isMailMutation(request)) throw new Error("Invalid HEY mail action.");
-    return mutateMail(request);
+    const result = await mutateMail(request);
+    if (request.operation === "trash" || request.operation === "spam") await mailDiskCache.clearProfile(profiles.state.active!).catch(() => undefined);
+    return result;
   });
   handle("mail:queue-trash", (_event, id, request) => {
     if (!isMailMutation(request) || request.operation !== "trash") throw new Error("Invalid trash action.");
     const context = profileRequest.getStore()!;
-    return deferredTrash.enqueue(trashId(id), profiles.state.token, () => profileRequest.run(context, () => mutateMail(request)));
+    const profile = profiles.state.active!;
+    return deferredTrash.enqueue(trashId(id), profiles.state.token, async () => {
+      const result = await profileRequest.run(context, () => mutateMail(request));
+      await mailDiskCache.clearProfile(profile).catch(() => undefined);
+      return result;
+    });
   });
   handle("mail:cancel-trash", (_event, id) => deferredTrash.cancel(trashId(id), profiles.state.token));
   handle("mail:pause-trash", (_event, id, paused) => {
@@ -391,8 +416,10 @@ function registerIpc(): void {
   });
   handle("theme:current", () => currentTheme());
   handle("settings:get", () => settingsStore.get());
-  handle("settings:update", (_event, update) => updateSettingsFromIpc(settingsStore, update));
-  handle("settings:reset", () => settingsStore.reset());
+  handle("settings:update", async (_event, update) => configureMailCache(await updateSettingsFromIpc(settingsStore, update)));
+  handle("settings:reset", async () => configureMailCache(await settingsStore.reset()));
+  handle("settings:mail-cache-stats", () => mailDiskCache.stats());
+  handle("settings:clear-mail-cache", () => mailDiskCache.clear());
   handle("writing:list-models", (_event, refresh) => {
     if (refresh !== undefined && typeof refresh !== "boolean") throw new Error("Invalid model refresh request.");
     return writing.listModels(refresh);
@@ -716,6 +743,7 @@ app.whenReady().then(async () => {
     catch { console.info(`HEY Agent ${app.getVersion()}`); }
   }
   registerIpc();
+  await configureMailCache(await settingsStore.get()).catch(() => console.warn("Mail cache is unavailable; live mail remains available."));
   await profiles.initialize();
   bindProfile();
   createWindow();

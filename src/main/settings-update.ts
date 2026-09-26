@@ -13,6 +13,14 @@ function isSettingsUpdate(value: unknown): value is AppSettingsUpdate {
   const update = value as Partial<AppSettingsUpdate>;
   if (update.shortcutEdit !== undefined && (!update.shortcutEdit || typeof update.shortcutEdit.id !== "string" || update.shortcutEdit.bindings !== null && !Array.isArray(update.shortcutEdit.bindings))) return false;
   if (update.showSenderAvatars !== undefined && typeof update.showSenderAvatars !== "boolean") return false;
+  if (update.mailCache !== undefined) {
+    const cache = update.mailCache;
+    if (!cache || typeof cache !== "object" || Array.isArray(cache)) return false;
+    if (cache.enabled !== undefined && typeof cache.enabled !== "boolean") return false;
+    if (cache.prefetch !== undefined && typeof cache.prefetch !== "boolean") return false;
+    if (cache.maxSizeMb !== undefined && ![50, 100, 250].includes(cache.maxSizeMb)) return false;
+    if (cache.retentionDays !== undefined && ![1, 7, 30].includes(cache.retentionDays)) return false;
+  }
   if (update.interfaceFont !== undefined && !isInterfaceFont(update.interfaceFont)) return false;
   if (update.shortcutProfile !== undefined && !["hey", "superhuman", "custom"].includes(update.shortcutProfile)) return false;
   if (update.customShortcuts !== undefined && (!update.customShortcuts || typeof update.customShortcuts !== "object" || Array.isArray(update.customShortcuts))) return false;

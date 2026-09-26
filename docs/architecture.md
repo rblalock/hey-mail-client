@@ -20,9 +20,17 @@ Keep account, posting, topic, contact, draft, and clearance IDs distinct. Calend
 
 Native `hey-agent:` links open the existing center surface. Missing objects stay missing; an explicit read-only request can ask Pi to find possible matches. Never silently replace an ID using a similar name.
 
-Library opens contacts, labels, and Collections into conversation lists, using 50-thread cursor pages. AI object previews remain limited to four threads. Returning from a Library conversation retains its loaded pages, filter, and scroll. HEY CLI 1.6.0 only lists attachments per thread, so there is no aggregated All Files or contact-files browser; do not build a background mailbox crawler to approximate one.
+Library opens contacts, labels, and Collections into conversation lists, using 50-thread cursor pages. AI object previews remain limited to four threads. Returning from a Library conversation retains its loaded pages, filter, and scroll. HEY CLI 1.7.0 only lists attachments per thread, so there is no aggregated All Files or contact-files browser; do not build a background mailbox crawler to approximate one.
 
-Composer attachments are staged privately inside the active profile's state directory. New messages, replies, and Reply Together share the same paste/drop handling. Local drafts retain staged files; removing an attachment or successfully sending/saving it removes the staged copy, never the original. CLI 1.6 appends uploads after the body. It cannot add files to forwards or existing saved drafts, or place new uploads between paragraphs. Draft edits omit unchanged bodies to preserve HEY's original HTML; Markdown bodies with attachment markers cannot safely be rewritten here.
+Composer attachments are staged privately inside the active profile's state directory. New messages, replies, and Reply Together share the same paste/drop handling. Local drafts retain staged files; removing an attachment or successfully sending/saving it removes the staged copy, never the original. CLI 1.7 appends uploads after the body. It cannot add files to forwards or existing saved drafts, or place new uploads between paragraphs. Draft edits omit unchanged bodies to preserve HEY's original HTML; Markdown bodies with attachment markers cannot safely be rewritten here. Edited reply recipients use native `reply --replace-recipients`; never recreate the old create-draft/edit/send workaround or use additive overrides for a complete edited envelope.
+
+## Local mail cache
+
+Settings → Mail opts into body caching; existing installations remain off. Users choose a combined 50/100/250 MB budget, 1/7/30-day fetch-age retention, and whether to preload nearby mail. Main stores validated thread bodies and attachment metadata under the app state directory's `mail-cache`, keyed by server/account/topic. Files are private (`0600`, directory `0700`), not encrypted by the app. No attachment downloads, third-party sync, or mailbox crawler are involved.
+
+Disk previews render while a live read runs. Memory reads revalidate after 30 seconds; watch changes invalidate affected disk entries, reconnect resync invalidates the profile, and sends/deletions invalidate the relevant profile cache. Stale request completions cannot refill cleared cache or replace a newer preview. Ordinary opens read only the requested cache file; a metadata index enforces age/LRU/byte limits without scanning the directory for every click. Explicit usage checks reconcile the index with disk. Oversized or incomplete attachment results are not cached. Disabling caching deletes stored copies; clearing does not modify HEY.
+
+Preloading is debounced on the highlighted row and serial for neighboring threads. It never marks mail seen or renders hidden HTML frames. Uncached first opens still need HEY; this is not a full offline mailbox. HEY remains authoritative for mail organization and cross-device state; cache/settings are local.
 
 ## Linked profiles
 

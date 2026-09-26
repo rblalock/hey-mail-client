@@ -17,6 +17,7 @@ import type {
 import { CALENDAR_HABIT_COLORS, CALENDAR_HABIT_ICONS } from "../shared/contracts";
 import { findExecutable, runFile } from "./profile-process";
 import { spawn } from "node:child_process";
+import { isHeyAuthenticationFailure as authFailure } from "./hey-errors";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -286,10 +287,6 @@ async function readCalendarRecordingsViaMcp(
       params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "hey-agent-app", version: "1" } },
     });
   });
-}
-
-function authFailure(error: unknown): boolean {
-  return /auth|login|credential|token|unauthorized|forbidden/i.test(error instanceof Error ? error.message : String(error));
 }
 
 async function read<T>(args: string[], empty: T, parse: (stdout: string) => T, env: NodeJS.ProcessEnv): Promise<CalendarReadResult<T>> {
