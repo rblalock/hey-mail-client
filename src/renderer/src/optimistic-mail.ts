@@ -41,6 +41,25 @@ export function applyOptimisticMailMutation(
   const postingIds = new Set(request.postingIds);
   let mailboxes = current;
 
+  if ((request.operation === "done" || request.operation === "undo-done") && request.completion) {
+    const restore = request.operation === "undo-done";
+    mailboxes = { ...current };
+    for (const state of request.completion) {
+      const original = Object.values(mailboxes).flatMap((box) => box?.postings ?? []).find((posting) => posting.id === state.id);
+      if (!original) continue;
+      const destination = restore ? state.sourceBox : "imbox";
+      const updated = { ...original, seen: restore ? state.seen : true, bubbledUp: restore ? state.bubbledUp : false,
+        boxGroupId: restore ? state.boxGroupId : undefined };
+      for (const key of Object.keys(mailboxes) as MailboxKey[]) {
+        const box = mailboxes[key];
+        if (box) mailboxes[key] = { ...box, postings: box.postings.filter((posting) => posting.id !== state.id && !(original.topicId && posting.topicId === original.topicId)) };
+      }
+      const box = mailboxes[destination] ?? { status: "ready" as const, boxKey: destination, boxName: destination, postings: [] };
+      mailboxes[destination] = { ...box, postings: [updated, ...box.postings] };
+    }
+    return { mailboxes, removedFromActiveMailbox: !restore };
+  }
+
   if (request.operation === "bubble-pop") {
     for (const key of Object.keys(current) as MailboxKey[]) {
       const mailbox = current[key];
@@ -76,6 +95,17 @@ export function applyOptimisticMailMutation(
     ...mailboxes,
     [source]: { ...sourceMailbox, postings: remaining },
   };
+  const destination = mutationDestination(request);
+  if (destination && mailboxes[destination]) {
+    const target = mailboxes[destination]!;
+    const moving = sourceMailbox.postings.filter((posting) => postingIds.has(posting.id)).map((posting) => ({
+      ...posting,
+      ...(source === "asidebox" && destination !== "asidebox" ? { boxGroupId: undefined } : {}),
+      ...(request.operation === "bubble" ? { bubbledUp: request.bubbleSchedule === "now" } : {}),
+      ...(request.operation === "bubble-pop" ? { bubbledUp: false } : {}),
+    }));
+    mailboxes[destination] = { ...target, postings: [...moving, ...target.postings.filter((posting) => !postingIds.has(posting.id))] };
+  }
   const removedFromActiveMailbox = source === activeMailbox;
   if (!removedFromActiveMailbox) return { mailboxes, removedFromActiveMailbox };
 

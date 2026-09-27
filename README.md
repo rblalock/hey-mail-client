@@ -7,6 +7,7 @@ A keyboard-first desktop app for HEY mail and Calendar, with your Pi agent along
 Work through your inbox, plan your day, and get help with the reply you've been putting off, all in one place.
 
 - Navigate, search, and organize mail with customizable keyboard shortcuts.
+- Choose a sectioned Imbox with Active, Reply Later, Set Aside, and Bubbled Up together. Older read mail loads as you scroll.
 - Manage your HEY calendar alongside your conversations.
 - Ask Helpers (Agents) for a Daily Brief, meeting prep, reply coaching, and calendar triage.
 - Create your own Helpers (Agents) with instructions for the work you do often.
@@ -22,6 +23,8 @@ The tested platform is **x86-64 Omarchy** (Intel or AMD). This is an independent
 ### Work through mail from your keyboard
 
 Move with `J` / `K`, open with `Enter`, and select with `X` or `Shift+J` / `Shift+K`. `Ctrl+K` opens commands and Helpers. Shortcuts are customizable.
+
+Choose **Sectioned** in the Imbox header or Settings → Mail to try the alternate layout. Read Active mail clears to Previously Seen when you leave it; kept mail stays until you press `E` for Done. You can switch back to **HEY** at any time.
 
 ![Inbox with Bubbled Up, New For You, and Previously Seen sections, two selected conversations, and bulk actions.](docs/screenshots/inbox.png)
 
@@ -92,13 +95,13 @@ HEY-like defaults on Linux. Single-letter shortcuts work outside text fields. Th
 | `Shift+K` or `Shift+↑` | Extend selection up |
 | `R` | Reply |
 | `F` | Forward |
-| `E` | Mark seen |
+| `E` | Mark seen; Done in the sectioned Imbox |
 | `U` | Toggle read / unread |
 | `L` or `H` | Add or remove Reply Later |
 | `A` | Add or remove Set Aside |
 | `Z` | Bubble up tomorrow, or cancel an active Bubble Up |
 | `T` or `#` | Move to Trash |
-| `Ctrl+Z` | Cancel the latest pending trash action (five-second window; text fields keep normal Undo) |
+| `Ctrl+Z` | Undo the visible mail action, or cancel pending trash (five-second window); text fields keep normal Undo |
 | `↑` / `↓` | Scroll an open conversation |
 | `Space` / `Shift+Space`, `PageDown` / `PageUp` | Page through an open conversation |
 | `Home` / `End` | Top / bottom of an open conversation |

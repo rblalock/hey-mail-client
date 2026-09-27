@@ -6,7 +6,7 @@ import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION } from "../../../shared
 import SettingsView from "./SettingsView";
 
 const settings: AppSettings = {
-  version: 1, showSenderAvatars: false, interfaceFont: "system-mono", shortcutProfile: "hey", customShortcuts: {},
+  version: 1, showSenderAvatars: false, imboxLayout: "hey", interfaceFont: "system-mono", shortcutProfile: "hey", customShortcuts: {},
   sound: DEFAULT_SOUND_SETTINGS, ai: DEFAULT_AI_SETTINGS, mailCache: DEFAULT_MAIL_CACHE_SETTINGS,
   helpers: { catalogVersion: HELPER_CATALOG_VERSION, enabled: DEFAULT_ENABLED_HELPERS },
 };
@@ -50,7 +50,7 @@ describe("Settings accordion", () => {
   it("places opt-in mail caching after Appearance and disables its dependent controls", () => {
     const $ = markup();
     expect($(".settings-section-label").slice(0, 3).map((_, element) => $(element).text()).get()).toEqual(["Appearance", "Mail", "Keyboard shortcuts"]);
-    expect($("#settings-mail-toggle .settings-section-summary").text()).toBe("Local cache off");
+    expect($("#settings-mail-toggle .settings-section-summary").text()).toBe("HEY layout · Local cache off");
     const toggle = $("#settings-mail-content [role=switch][aria-label='Keep a local mail cache']");
     expect(toggle.attr("aria-checked")).toBe("false");
     expect(toggle.attr("disabled")).toBeUndefined();
@@ -68,9 +68,28 @@ describe("Settings accordion", () => {
     expect($("#settings-mail-content [aria-label='Preload nearby emails']").attr("disabled")).toBeDefined();
   });
 
+  it("offers HEY and Sectioned Imbox layouts as an independent opt-in Mail preference", () => {
+    const $ = markup();
+    expect($("label[for='imbox-layout'] strong").text()).toBe("Imbox layout");
+    expect($("#imbox-layout option").map((_, element) => $(element).text()).get()).toEqual(["HEY", "Sectioned"]);
+    expect($("#imbox-layout option").map((_, element) => $(element).val()).get()).toEqual(["hey", "sectioned"]);
+    expect($("#imbox-layout option[selected]").val()).toBe("hey");
+    expect($("#imbox-layout").attr("disabled")).toBeUndefined();
+    expect($("#imbox-layout").attr("aria-describedby")).toBe("imbox-layout-description");
+    expect($("#imbox-layout-description").text()).toContain("Active, Reply Later, Set Aside, and Bubbled Up, with a quieter Previously Seen section");
+  });
+
+  it("reflects the saved Sectioned layout and defaults older settings to HEY", () => {
+    const $ = markup({ imboxLayout: "sectioned" });
+    expect($("#imbox-layout option[selected]").val()).toBe("sectioned");
+    expect($("#settings-mail-toggle .settings-section-summary").text()).toBe("Sectioned layout · Local cache off");
+    const older = markup({ imboxLayout: undefined });
+    expect(older("#imbox-layout option[selected]").val()).toBe("hey");
+  });
+
   it("exposes bounded, labeled cache choices when enabled", () => {
     const $ = markup({ mailCache: { enabled: true, maxSizeMb: 250, retentionDays: 30, prefetch: false } });
-    expect($("#settings-mail-toggle .settings-section-summary").text()).toBe("Local cache · 250 MB");
+    expect($("#settings-mail-toggle .settings-section-summary").text()).toBe("HEY layout · Local cache · 250 MB");
     expect($("label[for='mail-cache-size'] span").text()).toBe("Maximum size");
     expect($("#mail-cache-size option").map((_, element) => $(element).val()).get()).toEqual(["50", "100", "250"]);
     expect($("#mail-cache-size option[selected]").val()).toBe("250");

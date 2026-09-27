@@ -93,6 +93,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   version: 1,
   interfaceFont: "instrument",
   showSenderAvatars: false,
+  imboxLayout: "hey",
   mailCache: DEFAULT_MAIL_CACHE_SETTINGS,
   shortcutProfile: "hey",
   customShortcuts: {},

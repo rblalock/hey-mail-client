@@ -1,5 +1,6 @@
 import { load } from "cheerio";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImboxPosting, ImboxResult } from "../../../shared/contracts";
 import ImboxView from "./ImboxView";
@@ -9,12 +10,12 @@ const row = (id: string, seen: boolean, bubbledUp?: boolean): ImboxPosting => ({
   id, subject: id, summary: "Synthetic summary", seen, bubbledUp,
   createdAt: "2026-09-01T12:00:00Z", contacts: [], sender: { name: "Example" }, visibleEntryCount: 1,
 });
-function render(result: ImboxResult, showSenderAvatars = false, bulkSelectedIds: string[] = []) {
+function render(result: ImboxResult, showSenderAvatars = false, bulkSelectedIds: string[] = [], extra: Partial<ComponentProps<typeof ImboxView>> = {}) {
   return load(renderToStaticMarkup(<ImboxView mailboxKey={result.boxKey} result={result} loading={false} searchRequest={0}
     showSenderAvatars={showSenderAvatars} bulkSelectedIds={bulkSelectedIds} bulkBusy={false} commandPaletteOpen={false}
     onSelect={noop} onHighlight={noop} onToggleSelection={noop} onBulkAction={noop} onReadTogether={noop}
     onReplyTogether={noop} onOrganizeSelection={noop} onClearSelection={noop}
-    onRefresh={noop} onNavigate={noop} onSetAsideGroup={noop} />));
+    onRefresh={noop} onNavigate={noop} onSetAsideGroup={noop} {...extra} />));
 }
 const imbox = (postings: ImboxPosting[]): ImboxResult => ({ status: "ready", boxKey: "imbox", boxName: "Imbox", postings });
 
@@ -96,5 +97,70 @@ describe("Imbox section presentation", () => {
     const $ = render({ ...imbox([row("scheduled", false, true)]), boxKey: "bubblebox", boxName: "Bubble Up" });
     expect($(".imbox-section-heading, .bubbled-up-mark")).toHaveLength(0);
     expect($(".mail-row time")).toHaveLength(1);
+  });
+
+  it("renders the optional layout in task order with compact Previously Seen rows", () => {
+    const result = imbox([row("old", true), row("new", false), row("due", true, true)]);
+    const $ = render(result, false, [], { sectioned: true, onLayoutChange: noop, sectionMailboxes: { laterbox: { ...imbox([row("later", true)]), boxKey: "laterbox" }, asidebox: { ...imbox([row("aside", true)]), boxKey: "asidebox" } } });
+    expect($(".sectioned-imbox-heading button").map((_, e) => $(e).text()).get()).toEqual(["Active1", "Reply Later1", "Set Aside1", "Bubbled Up1", "Previously Seen1"]);
+    expect($(".mail-row").map((_, e) => $(e).attr("data-posting-id")).get()).toEqual(["new", "later", "aside", "due", "old"]);
+    expect($(".mail-row.is-compact .summary-line")).toHaveLength(0);
+    expect($(".mail-row.is-compact .subject-line strong").text()).toBe("old");
+    expect($(".imbox-layout-switch [aria-pressed=true]").text()).toBe("Sectioned");
+    expect($(".sectioned-imbox-heading [aria-expanded=true]")).toHaveLength(5);
+    expect($(".list-footer").text()).toContain("Done");
+  });
+
+  it("starts with 25 seen rows and reports that partial count honestly without a Load more button", () => {
+    const result = { ...imbox(Array.from({ length: 52 }, (_, index) => row(`seen-${index}`, true))), nextPage: "2" };
+    const $ = render(result, false, [], { sectioned: true, onLoadMore: noop });
+    expect($(".mail-row")).toHaveLength(25);
+    expect($("[data-section=previouslySeen] .sectioned-imbox-heading em").text()).toBe("25 shown");
+    expect($(".sectioned-imbox-sentinel")).toHaveLength(1);
+    expect($("button").filter((_, e) => /load more/i.test($(e).text()))).toHaveLength(0);
+  });
+
+  it("keeps Active and Bubbled Up counts complete when older history has another page", () => {
+    const $ = render({ ...imbox([row("active", false), row("due", false, true), row("seen", true)]), nextPage: "2" }, false, [], { sectioned: true });
+    expect($("[data-section=active] .sectioned-imbox-heading em").text()).toBe("1");
+    expect($("[data-section=bubbledUp] .sectioned-imbox-heading em").text()).toBe("1");
+    expect($("[data-section=previouslySeen] .sectioned-imbox-heading em").text()).toBe("1 shown");
+  });
+
+  it("only references an active descendant that is actually visible", () => {
+    vi.stubGlobal("window", { localStorage: { getItem: () => JSON.stringify(["replyLater"]) } });
+    const result = imbox([row("active", false), ...Array.from({ length: 26 }, (_, index) => row(`seen-${index}`, true))]);
+    const extra = { sectioned: true, sectionMailboxes: { laterbox: { ...imbox([row("saved", true)]), boxKey: "laterbox" as const } } };
+    for (const selectedId of ["saved", "seen-25", "missing"]) {
+      expect(render(result, false, [], { ...extra, selectedId })(".mail-list").attr("aria-activedescendant")).toBeUndefined();
+    }
+    expect(render(result, false, [], { ...extra, selectedId: "active" })(".mail-list").attr("aria-activedescendant")).toBe("mail-row-active");
+    expect(render(result, false, [], { ...extra, selectedId: "active", hidden: true })(".mail-list").attr("aria-activedescendant")).toBeUndefined();
+  });
+
+  it("restores collapsed sections for the active profile and does not render their sentinel or rows", () => {
+    const getItem = vi.fn((key: string) => key === "hey-agent:imbox-sections:work" ? JSON.stringify(["previouslySeen", "replyLater", "unknown"]) : null);
+    vi.stubGlobal("window", { localStorage: { getItem } });
+    const result = { ...imbox([row("old", true), row("new", false)]), nextPage: "2" };
+    const $ = render(result, false, [], { sectioned: true, profileKey: "work" });
+    expect($("[data-section=previouslySeen] button[aria-expanded=false]")).toHaveLength(1);
+    expect($(".mail-row")).toHaveLength(1);
+    expect($(".sectioned-imbox-sentinel")).toHaveLength(0);
+    expect(render(result, false, [], { sectioned: true, profileKey: "personal" })(".mail-row")).toHaveLength(2);
+  });
+
+  it("distinguishes loading and failed saved sections from empty sections", () => {
+    const $ = render(imbox([]), false, [], { sectioned: true, sectionMailboxes: { asidebox: { ...imbox([]), boxKey: "asidebox", status: "unavailable", detail: "Offline" } }, loadMoreError: "Older conversations could not load.", onLoadMore: noop });
+    expect($("[data-section=replyLater] .sectioned-imbox-notice").text()).toBe("Loading Reply Later…");
+    expect($("[data-section=setAside] .sectioned-imbox-notice").text()).toContain("Set Aside unavailable. Offline");
+    expect($(".sectioned-imbox-pagination-error button").text()).toBe("Retry");
+  });
+
+  it("offers Done directly for a sectioned selection and leaves other mailboxes unchanged", () => {
+    const $ = render(imbox([row("new", false)]), false, ["new"], { sectioned: true });
+    expect($(".sectioned-done-button").text()).toContain("Done");
+    const feed = render({ ...imbox([row("feed", true)]), boxKey: "feedbox" }, false, [], { sectioned: true, onLayoutChange: noop });
+    expect(feed(".sectioned-imbox-group, .imbox-layout-switch, .is-compact")).toHaveLength(0);
+    expect(feed(".mail-row")).toHaveLength(1);
   });
 });

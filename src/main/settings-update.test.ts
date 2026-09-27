@@ -10,6 +10,20 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("settings:update boundary", () => {
+  it("persists both Imbox layouts and rejects invalid choices without changing saved settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hey-layout-settings-")); roots.push(root);
+    const file = join(root, "settings.json"), store = new SettingsStore(file);
+    for (const imboxLayout of ["sectioned", "hey", "sectioned"] as const) {
+      expect((await updateSettingsFromIpc(store, { imboxLayout })).imboxLayout).toBe(imboxLayout);
+      expect(JSON.parse(await readFile(file, "utf8")).imboxLayout).toBe(imboxLayout);
+      expect((await new SettingsStore(file).get()).imboxLayout).toBe(imboxLayout);
+    }
+    for (const imboxLayout of ["unknown", "HEY", "", true, 1, null, {}, []]) {
+      expect(() => updateSettingsFromIpc(store, { imboxLayout, interfaceFont: "system" })).toThrow("Invalid HEY Agent settings.");
+    }
+    expect(await new SettingsStore(file).get()).toMatchObject({ imboxLayout: "sectioned", interfaceFont: "instrument" });
+  });
+
   it("defaults mail caching off, persists bounded choices, and resets to off", async () => {
     const root = await mkdtemp(join(tmpdir(), "hey-cache-settings-")); roots.push(root);
     const file = join(root, "settings.json"), store = new SettingsStore(file);

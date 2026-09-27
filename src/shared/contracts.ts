@@ -273,6 +273,8 @@ export type ImboxResult = {
   detail?: string;
 };
 
+export type MailboxListOptions = { page?: string; paginated?: boolean };
+
 export type MailThreadListing = {
   kind: "bundle" | "contact";
   id: string;
@@ -290,7 +292,15 @@ export type SetAsideGroupMutationRequest = {
 
 export type BubbleSchedule = "now" | "tomorrow" | "weekend" | "next-week";
 
-export type MailOperation = "move" | "bubble" | "bubble-pop" | "seen" | "unseen" | "trash" | "spam" | "ignore" | "stop-ignoring";
+export type MailOperation = "move" | "bubble" | "bubble-pop" | "seen" | "unseen" | "trash" | "spam" | "ignore" | "stop-ignoring" | "done" | "undo-done";
+
+export type MailCompletionState = {
+  id: string;
+  sourceBox: MailboxKey;
+  seen: boolean;
+  bubbledUp: boolean;
+  boxGroupId?: string;
+};
 
 export type MailMutationRequest = {
   operation: MailOperation;
@@ -298,6 +308,7 @@ export type MailMutationRequest = {
   destination?: MailboxKey;
   sourceBox?: MailboxKey;
   bubbleSchedule?: BubbleSchedule;
+  completion?: MailCompletionState[];
 };
 
 export type MailMutationResult = {
@@ -544,6 +555,7 @@ export type AppSettings = {
   version: 1;
   interfaceFont: InterfaceFont;
   showSenderAvatars: boolean;
+  imboxLayout: "hey" | "sectioned";
   mailCache: MailCacheSettings;
   shortcutProfile: ShortcutProfile;
   customShortcuts: Record<string, string[]>;
@@ -556,6 +568,7 @@ export type AppSettingsUpdate = {
   shortcutEdit?: { id: string; bindings: string[] | null };
   interfaceFont?: InterfaceFont;
   showSenderAvatars?: boolean;
+  imboxLayout?: AppSettings["imboxLayout"];
   mailCache?: Partial<MailCacheSettings>;
   shortcutProfile?: ShortcutProfile;
   customShortcuts?: Record<string, string[]>;
@@ -911,7 +924,7 @@ export type HeyAgentApi = {
   };
   mail: {
     listImbox(): Promise<ImboxResult>;
-    listMailbox(box: MailboxKey): Promise<ImboxResult>;
+    listMailbox(box: MailboxKey, options?: MailboxListOptions): Promise<ImboxResult>;
     search(request: MailSearchRequest): Promise<MailSearchResult>;
     searchFilters(): Promise<MailSearchFilters>;
     getOrganization(target: MailOrganizationTarget): Promise<MailOrganization>;

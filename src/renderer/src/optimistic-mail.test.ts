@@ -25,6 +25,34 @@ function update(cache: MailboxCache, request: MailMutationRequest, cursor = "2")
 }
 
 describe("optimistic mail mutations", () => {
+  it("finishes kept and resurfaced conversations once, then restores their original state", () => {
+    const aside = { ...posting("1", false), boxGroupId: "42" };
+    const due = { ...posting("2", true), bubbledUp: true };
+    const cache = { imbox: mailbox("imbox", [due]), asidebox: mailbox("asidebox", [aside]), laterbox: mailbox("laterbox", [posting("3", false)]) };
+    const completion = [
+      { id: "1", sourceBox: "asidebox" as const, seen: false, bubbledUp: false, boxGroupId: "42" },
+      { id: "2", sourceBox: "imbox" as const, seen: true, bubbledUp: true },
+      { id: "3", sourceBox: "laterbox" as const, seen: false, bubbledUp: false },
+    ];
+    const request = { operation: "done" as const, postingIds: ["1", "2", "3"], completion };
+    const finished = update(cache, request).mailboxes;
+    expect(finished.asidebox?.postings).toEqual([]);
+    expect(finished.laterbox?.postings).toEqual([]);
+    expect(finished.imbox?.postings).toHaveLength(3);
+    expect(finished.imbox?.postings.every((row) => row.seen && !row.bubbledUp && !row.boxGroupId)).toBe(true);
+    expect(cache.asidebox.postings).toEqual([aside]);
+    const restored = update(finished, { ...request, operation: "undo-done" }).mailboxes;
+    expect(restored.asidebox?.postings[0]).toMatchObject(aside);
+    expect(restored.imbox?.postings[0]).toMatchObject(due);
+    expect(restored.laterbox?.postings[0]).toMatchObject(posting("3", false));
+  });
+  it("moves saved mail into a cached destination without stale group membership", () => {
+    const saved = { ...posting("1", true), boxGroupId: "42" };
+    const cache = { imbox: mailbox("imbox", []), asidebox: mailbox("asidebox", [saved]) };
+    const result = update(cache, { operation: "move", postingIds: ["1"], sourceBox: "asidebox", destination: "imbox" });
+    expect(result.mailboxes.imbox?.postings[0]).toMatchObject({ id: "1", boxGroupId: undefined });
+    expect(result.mailboxes.asidebox?.postings).toEqual([]);
+  });
   it("clears a returned bubble without removing its email or changing read state", () => {
     const cache = { imbox: mailbox("imbox", [{ ...posting("1", true), bubbledUp: true }, posting("2", false)]) };
     const result = update(cache, { operation: "bubble-pop", postingIds: ["1"], sourceBox: "imbox" });

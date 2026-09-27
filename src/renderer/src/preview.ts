@@ -1,4 +1,4 @@
-import { DEFAULT_SOUND_SETTINGS, DEFAULT_MAIL_CACHE_SETTINGS, type AgentWorkspace, type AppSettings, type CalendarEvent, type CalendarHabit, type CalendarJournalEntry, type CalendarSummary, type CalendarTimeCategory, type CalendarTimeTrack, type CalendarTodo, type HeyAgentApi, type ImboxPosting, type MailDraft, type ScreenerEntry, type ThemeSnapshot } from "../../shared/contracts";
+import { DEFAULT_SOUND_SETTINGS, DEFAULT_MAIL_CACHE_SETTINGS, type AgentWorkspace, type AppSettings, type CalendarEvent, type CalendarHabit, type CalendarJournalEntry, type CalendarSummary, type CalendarTimeCategory, type CalendarTimeTrack, type CalendarTodo, type HeyAgentApi, type ImboxPosting, type ImboxResult, type MailboxKey, type MailboxListOptions, type MailCompletionState, type MailMutationRequest, type MailMutationResult, type MailDraft, type ScreenerEntry, type ThemeSnapshot } from "../../shared/contracts";
 import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, helperById, isCustomHelperId, type HelperId } from "../../shared/helpers";
 import { addDays, eventOccursOn } from "./calendar";
 import { DeferredTrash } from "../../shared/deferred-trash";
@@ -15,6 +15,7 @@ const previewAgentComplete = previewParams.has("agent-complete");
 const previewAgentMissing = previewParams.has("agent-missing");
 const previewBundle = previewParams.has("bundle");
 const previewSetAsideGroups = previewParams.has("set-aside-groups");
+const previewSectionedImbox = previewParams.has("sectioned-imbox");
 const previewRecurrence = previewParams.has("recurrence");
 const previewCalendarCollisions = previewParams.has("calendar-collisions");
 const previewThemeName = previewParams.get("theme");
@@ -130,7 +131,79 @@ const previewEvents: CalendarEvent[] = [
   { id: "405", title: "Walk the river trail", startsAt: "2026-09-05T10:00:00-04:00", endsAt: "2026-09-05T12:00:00-04:00", allDay: false, recurring: false, calendar: previewCalendars[2]!, location: "If the weather holds", reminders: [], attendees: [] },
 ];
 
+// Fictional, independent mailbox state for the sectioned Imbox browser proof.
+function sectionedImboxFixture() {
+  const posting = (id: number, subject: string, seen = false): ImboxPosting => ({
+    id: String(id), topicId: String(id + 10_000), kind: "thread", subject, seen,
+    summary: "Fictional preview conversation for checking the Imbox workflow.",
+    createdAt: minutesAgo(id - 2_000), sender: { name: "Preview Studio", email: "studio@example.com" },
+    contacts: [{ name: "Preview Studio", email: "studio@example.com" }], visibleEntryCount: 1,
+  });
+  const boxes: Record<MailboxKey, ImboxPosting[]> = {
+    imbox: [
+      posting(2101, "Active one — launch notes"), posting(2102, "Active two — studio decisions"),
+      posting(2103, "Active three — travel plans"), posting(2104, "Active four — Friday review"),
+      { ...posting(2401, "Returned reminder — review the proposal", true), bubbledUp: true },
+      ...Array.from({ length: 75 }, (_, index) => posting(3000 + index, `Previously Seen ${String(index + 1).padStart(2, "0")} — project archive`, true)),
+    ],
+    laterbox: [posting(2201, "Reply Later one — answer the invitation"), posting(2202, "Reply Later two — send the estimate", true)],
+    asidebox: [posting(2301, "Set Aside one — keep the itinerary"), posting(2302, "Set Aside two — reference notes", true)],
+    bubblebox: [posting(2501, "Scheduled reminder — next week", true)], feedbox: [], trailbox: [],
+  };
+  const requests: Array<{ box: MailboxKey; options?: MailboxListOptions }> = [];
+  const mutations: MailMutationRequest[] = [];
+  const find = (id: string) => Object.entries(boxes).flatMap(([box, items]) => items.map((item) => ({ box: box as MailboxKey, item }))).find(({ item }) => item.id === id);
+  const place = (item: ImboxPosting, box: MailboxKey) => {
+    for (const key of Object.keys(boxes) as MailboxKey[]) boxes[key] = boxes[key].filter((candidate) => candidate.id !== item.id);
+    boxes[box].unshift(item);
+  };
+  const list = (box: MailboxKey, options?: MailboxListOptions): ImboxResult => {
+    requests.push(structuredClone({ box, options }));
+    const names: Record<MailboxKey, string> = { imbox: "Imbox", laterbox: "Reply Later", asidebox: "Set Aside", bubblebox: "Bubble Up", feedbox: "The Feed", trailbox: "Paper Trail" };
+    const result: ImboxResult = { status: "ready", boxKey: box, boxName: names[box], postings: boxes[box] };
+    if (box === "imbox" && (options?.paginated || options?.page)) {
+      const history = boxes.imbox.filter((item) => item.seen && !item.bubbledUp);
+      const offset = options.page ? Number(options.page.replace("sectioned:", "")) : 0;
+      if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid fictional history cursor.");
+      // Overlap one item on later pages to exercise the real merge's deduplication.
+      result.postings = options.page ? history.slice(Math.max(0, offset - 1), offset + 25) : [...boxes.imbox.filter((item) => !item.seen || item.bubbledUp), ...history.slice(0, 25)];
+      if (offset + 25 < history.length) result.nextPage = `sectioned:${offset + 25}`;
+    }
+    return structuredClone(result);
+  };
+  const mutate = (request: MailMutationRequest): MailMutationResult => {
+    mutations.push(structuredClone(request));
+    const before: MailCompletionState[] = request.postingIds.flatMap((id) => {
+      const found = find(id);
+      return found ? [{ id, sourceBox: found.box, seen: found.item.seen, bubbledUp: found.item.bubbledUp === true, ...(found.item.boxGroupId ? { boxGroupId: found.item.boxGroupId } : {}) }] : [];
+    });
+    for (const id of request.postingIds) {
+      const found = find(id);
+      if (!found) continue;
+      const item = { ...found.item };
+      if (request.operation === "done") place({ ...item, seen: true, bubbledUp: false, boxGroupId: undefined }, "imbox");
+      else if (request.operation === "undo-done") {
+        const original = request.completion?.find((value) => value.id === id);
+        if (original) place({ ...item, seen: original.seen, bubbledUp: original.bubbledUp, boxGroupId: original.boxGroupId }, original.sourceBox);
+      } else if (request.operation === "move" && request.destination) place({ ...item, ...(found.box === "asidebox" && request.destination !== "asidebox" ? { boxGroupId: undefined } : {}) }, request.destination);
+      else if (request.operation === "seen" || request.operation === "unseen") place({ ...item, seen: request.operation === "seen" }, found.box);
+      else if (request.operation === "bubble") place({ ...item, bubbledUp: request.bubbleSchedule === "now" }, request.bubbleSchedule === "now" ? "imbox" : "bubblebox");
+      else if (request.operation === "bubble-pop") place({ ...item, bubbledUp: false }, "imbox");
+      else if (["trash", "spam", "ignore"].includes(request.operation)) boxes[found.box] = boxes[found.box].filter((candidate) => candidate.id !== id);
+    }
+    let undo: MailMutationRequest | undefined;
+    if (request.operation === "done") undo = { operation: "undo-done", postingIds: request.postingIds, completion: structuredClone(request.completion ?? before) };
+    else if (request.operation === "move" && request.sourceBox) undo = { operation: "move", postingIds: request.postingIds, destination: request.sourceBox, sourceBox: request.destination };
+    else if (request.operation === "seen") undo = { operation: "unseen", postingIds: request.postingIds };
+    else if (request.operation === "unseen") undo = { operation: "seen", postingIds: request.postingIds };
+    return { message: request.operation === "done" ? "Conversation marked done." : "Conversation updated.", undo };
+  };
+  Object.assign(window, { __sectionedImboxPreview: { requests, mutations, snapshot: () => structuredClone(boxes) } });
+  return { list, mutate, findTopic: (topicId: string) => Object.values(boxes).flat().find((item) => item.topicId === topicId), overview: () => ({ count: boxes.laterbox.length, latest: boxes.laterbox[0] }) };
+}
+
 export function previewApi(): HeyAgentApi {
+  const sectionedFixture = previewSectionedImbox ? sectionedImboxFixture() : undefined;
   const trash = new DeferredTrash();
   const accounts = [
     { key: "a".repeat(32), accountId: "101", name: "Alex Morgan", email: "alex@example.com", server: "https://app.hey.com" },
@@ -142,7 +215,7 @@ export function previewApi(): HeyAgentApi {
     accounts.splice(1);
   }
   const account = accounts.find((item) => item.key === localStorage.getItem("preview-profile")) ?? accounts[0]!;
-  let settings: AppSettings = { version: 1, showSenderAvatars: false, mailCache: { ...DEFAULT_MAIL_CACHE_SETTINGS }, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: { catalogVersion: HELPER_CATALOG_VERSION, enabled: [...DEFAULT_ENABLED_HELPERS] } };
+  let settings: AppSettings = { version: 1, showSenderAvatars: false, imboxLayout: previewSectionedImbox ? "sectioned" : "hey", mailCache: { ...DEFAULT_MAIL_CACHE_SETTINGS }, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: { catalogVersion: HELPER_CATALOG_VERSION, enabled: [...DEFAULT_ENABLED_HELPERS] } };
   let mailDrafts: MailDraft[] = [{ id: "draft-1", subject: "Launch follow-up", to: "maya@example.com", cc: "", bcc: "", body: "Hi Maya,\n\nThe revised sequence looks good. I have one final question about Friday.", updatedAt: "2026-09-03T18:10:00-04:00" }];
   let calendarEvents = structuredClone(previewEvents);
   let calendarTodos: CalendarTodo[] = [
@@ -279,8 +352,8 @@ export function previewApi(): HeyAgentApi {
       openExternalUrl: async () => undefined,
     },
     mail: {
-      listImbox: async () => ({ status: "ready", boxKey: "imbox", boxName: "Imbox", postings: imboxPostings }),
-      listMailbox: async (box) => ({ status: "ready", boxKey: box, boxName: box === "imbox" ? "Imbox" : box === "asidebox" ? "Set Aside" : "Mailbox", postings: box === "asidebox" && previewSetAsideGroups ? setAsidePostings : imboxPostings }),
+      listImbox: async () => sectionedFixture?.list("imbox") ?? ({ status: "ready", boxKey: "imbox", boxName: "Imbox", postings: imboxPostings }),
+      listMailbox: async (box, options) => sectionedFixture?.list(box, options) ?? ({ status: "ready", boxKey: box, boxName: box === "imbox" ? "Imbox" : box === "asidebox" ? "Set Aside" : "Mailbox", postings: box === "asidebox" && previewSetAsideGroups ? setAsidePostings : imboxPostings }),
       search: async (request) => ({ query: request.query ?? "", page: request.page ?? 1, hasMore: false, postings: postings.filter((posting) => `${posting.subject} ${posting.summary}`.toLowerCase().includes((request.query ?? "").toLowerCase())) }),
       searchFilters: async () => ({ boxes: [{ value: "imbox", title: "Imbox" }], dates: [{ value: "last_30_days", title: "Within the last 30 days" }], labels: [], attachments: [{ value: "pdfs", title: "PDFs" }] }),
       getOrganization: async (target) => ({
@@ -300,7 +373,7 @@ export function previewApi(): HeyAgentApi {
         return { message: `${members.length} ${members.length === 1 ? "conversation" : "conversations"} updated.` };
       },
       listScreener: async () => ({ status: "ready", entries: screenerEntries }),
-      getOverview: async () => ({ screener: { status: "ready", entries: screenerEntries }, replyLater: { count: 3, latest: postings[0] } }),
+      getOverview: async () => ({ screener: { status: "ready", entries: screenerEntries }, replyLater: sectionedFixture?.overview() ?? { count: 3, latest: postings[0] } }),
       decideScreener: async () => ({ message: "Screener updated." }),
       listLibrary: async (kind) => ({ kind, items: kind === "contacts" ? postings.map((posting, index) => ({ id: String(index), title: posting.sender.name, subtitle: posting.sender.email, contact: posting.sender })) : [] }),
       readLibrarySource: async (kind, id) => ({ kind, id, title: kind === "labels" ? "Launch" : "Fall launch", totalCount: 3, postings: postings.slice(0, 3) }),
@@ -325,7 +398,7 @@ export function previewApi(): HeyAgentApi {
       readCachedThread: async () => undefined,
       readThread: async (topicId) => ({
         topicId,
-        subject: postings.find((posting) => posting.topicId === topicId)?.subject ?? "Conversation",
+        subject: sectionedFixture?.findTopic(topicId)?.subject ?? postings.find((posting) => posting.topicId === topicId)?.subject ?? "Conversation",
         entries: [
           {
             id: `${topicId}-entry-1`,
@@ -361,8 +434,8 @@ export function previewApi(): HeyAgentApi {
           },
         ],
       }),
-      mutate: async (request) => ({ message: "Conversation updated.", undo: request.operation === "seen" ? { operation: "unseen", postingIds: request.postingIds } : undefined }),
-      queueTrash: (id) => trash.enqueue(id, "preview", async () => ({ message: "Moved to Trash." })),
+      mutate: async (request) => sectionedFixture?.mutate(request) ?? ({ message: "Conversation updated.", undo: request.operation === "seen" ? { operation: "unseen", postingIds: request.postingIds } : undefined }),
+      queueTrash: (id, request) => trash.enqueue(id, "preview", async () => sectionedFixture?.mutate(request) ?? ({ message: "Moved to Trash." })),
       cancelTrash: async (id) => trash.cancel(id, "preview"),
       pauseTrash: async (id, paused) => trash.pause(id, "preview", paused),
       send: async (request) => ({ disposition: request.saveAsDraft ? "draft" : "sent", message: request.saveAsDraft ? "Draft saved in HEY." : "Message sent." }),
@@ -511,7 +584,7 @@ export function previewApi(): HeyAgentApi {
         }
         settings = { ...settings, ...update, customShortcuts, mailCache: { ...settings.mailCache, ...update.mailCache }, sound: { ...settings.sound, ...update.sound }, ai: { ...settings.ai, ...update.ai }, helpers: { ...settings.helpers, ...update.helpers }, version: 1, shortcutProfile: update.shortcutProfile ?? settings.shortcutProfile }; return settings;
       },
-      reset: async () => { settings = { version: 1, showSenderAvatars: false, mailCache: { ...DEFAULT_MAIL_CACHE_SETTINGS }, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: settings.helpers }; return settings; },
+      reset: async () => { settings = { version: 1, showSenderAvatars: false, imboxLayout: "hey", mailCache: { ...DEFAULT_MAIL_CACHE_SETTINGS }, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: settings.helpers }; return settings; },
       mailCacheStats: async () => ({ entries: 0, bytes: 0 }),
       clearMailCache: async () => undefined,
     },

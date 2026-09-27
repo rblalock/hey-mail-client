@@ -13,7 +13,7 @@ const api: HeyAgentApi = {
   },
   mail: {
     listImbox: () => invoke("mail:list-imbox"),
-    listMailbox: (box) => invoke("mail:list-mailbox", box),
+    listMailbox: (box, options) => invoke("mail:list-mailbox", box, options),
     search: (request) => invoke("mail:search", request),
     searchFilters: () => invoke("mail:search-filters"),
     getOrganization: (target) => invoke("mail:get-organization", target),

@@ -10,6 +10,32 @@ const personal: CustomHelper = { id: "custom-project", title: "Project check-in"
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("SettingsStore", () => {
+  it("keeps the HEY Imbox layout for old or malformed settings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hey-agent-settings-"));
+    roots.push(root);
+    const file = join(root, "settings.json");
+    for (const saved of [{ interfaceFont: "system-mono" }, ...[null, true, 1, "unknown", {}, []].map((imboxLayout) => ({ imboxLayout }))]) {
+      await writeFile(file, JSON.stringify(saved));
+      expect((await new SettingsStore(file).get()).imboxLayout).toBe("hey");
+    }
+  });
+
+  it("serializes Imbox layout changes with other settings and restores the default on reset", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hey-agent-settings-"));
+    roots.push(root);
+    const file = join(root, "settings.json");
+    const store = new SettingsStore(file);
+    expect((await store.get()).imboxLayout).toBe("hey");
+    await Promise.all([
+      store.update({ imboxLayout: "sectioned" }),
+      store.update({ interfaceFont: "system-mono" }),
+      store.update({ mailCache: { enabled: true } }),
+    ]);
+    expect(await new SettingsStore(file).get()).toMatchObject({ imboxLayout: "sectioned", interfaceFont: "system-mono", mailCache: { enabled: true } });
+    expect((await store.reset()).imboxLayout).toBe("hey");
+    expect((await new SettingsStore(file).get()).imboxLayout).toBe("hey");
+  });
+
   it("migrates old settings to text-only lists and ignores malformed avatar preferences", async () => {
     const root = await mkdtemp(join(tmpdir(), "hey-agent-settings-"));
     roots.push(root);

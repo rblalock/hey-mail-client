@@ -17,6 +17,8 @@ import { isCalendarSearchRequest, searchCalendar } from "./hey-calendar-search";
 import { completeCalendarHabit, completeCalendarTodo, createCalendarTimeCategory, createCalendarTodo, currentCalendarTimeTrack, deleteCalendarHabit, deleteCalendarTimeCategory, deleteCalendarTimeTrack, deleteCalendarTodo, exportCalendarTimeTracks, isCalendarHabitCompletionRequest, isCalendarHabitWriteRequest, isCalendarJournalWriteRequest, isCalendarTimeCategoryTitle, isCalendarTimeStopRequest, isCalendarTimeTrackUpdateRequest, isCalendarTodoCompletionRequest, isCalendarTodoCreateRequest, listCalendarHabits, listCalendarJournal, listCalendarTimeCategories, listCalendarTimeTracks, listCalendarTodos, readCalendarJournal, renameCalendarTimeCategory, startCalendarTimeTrack, stopCalendarTimeTrack, updateCalendarTimeTrack, writeCalendarHabit, writeCalendarJournal } from "./hey-calendar-recordings";
 import { decideScreener, deleteDraft, editDraft, getMailOrganization, getMailOverview, getReplyContext, listContactThreads, listDrafts, listImbox, listLibrary, listMailbox, listScreener, listSearchFilters, mutateMail, previewBulkReply, readBundle, readLibrarySource, readThread, searchMail, sendBulkReply, sendDraft, sendMail, showContact, showDraft, unbundleContact, undoBulkReply, updateMailOrganization, updateSetAsideGroup } from "./hey";
 import { HeyWatcher } from "./hey-watch";
+import { mailboxListOptions } from "./hey";
+import { completionState } from "./mail-completion";
 import { resolveAppPaths } from "./paths";
 import { probeRuntimes } from "./runtime";
 import { SettingsStore } from "./settings-store";
@@ -185,9 +187,9 @@ function registerIpc(): void {
     await shell.openExternal(url);
   });
   handle("mail:list-imbox", () => listImbox());
-  handle("mail:list-mailbox", (_event, box) => {
+  handle("mail:list-mailbox", (_event, box, options) => {
     if (typeof box !== "string") throw new Error("A HEY mailbox is required.");
-    return listMailbox(box as MailboxKey);
+    return listMailbox(box as MailboxKey, process.env, mailboxListOptions(options));
   });
   handle("mail:search", (_event, request) => {
     if (!isMailSearchRequest(request)) throw new Error("A valid HEY search is required.");
@@ -515,8 +517,11 @@ function registerIpc(): void {
 }
 
 function isMailMutation(value: unknown): value is MailMutationRequest {
-  if (!value || typeof value !== "object") return false;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const request = value as Partial<MailMutationRequest>;
+  if (request.operation === "done" || request.operation === "undo-done") {
+    try { completionState(request as MailMutationRequest); return true; } catch { return false; }
+  }
   return ["move", "bubble", "bubble-pop", "seen", "unseen", "trash", "spam", "ignore", "stop-ignoring"].includes(request.operation ?? "")
     && Array.isArray(request.postingIds)
     && request.postingIds.length > 0

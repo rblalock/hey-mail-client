@@ -1,11 +1,12 @@
-import { ArrowUpCircle, BellOff, Check, Circle, Clock3, Eye, EyeOff, FileClock, FolderKanban, FolderPlus, Inbox, Layers3, MoreHorizontal, Newspaper, RefreshCw, Reply, Rows3, Search, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Ungroup } from "lucide-react";
-import { Fragment, useContext, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { ArrowUpCircle, BellOff, Check, ChevronDown, Circle, Clock3, Eye, EyeOff, FileClock, FolderKanban, FolderPlus, Inbox, Layers3, MoreHorizontal, Newspaper, RefreshCw, Reply, Rows3, Search, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Ungroup } from "lucide-react";
+import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { activateMailRow } from "../mail-row-keyboard";
 import { Bell } from "lucide-react";
 import type { ImboxPosting, ImboxResult, MailboxKey, MailOrganizationKind, MailOverview, SetAsideGroupMutationRequest } from "../../../shared/contracts";
 import type { ShortcutId } from "../shortcuts";
 import { appSound } from "../sound";
 import { groupImboxPostings } from "../mailbox-navigation";
+import { groupSectionedImbox, IMBOX_SECTION_ORDER, PREVIOUSLY_SEEN_BATCH, sectionedSelectionSource, type ImboxSectionKey, type SectionedMailboxes } from "../sectioned-imbox";
 import { mailDayHeaders } from "../mail-days";
 import { mailToggle } from "../mail-toggles";
 import { paperTrailVisitBoundary, usePaperTrailVisit } from "../mailbox-visits";
@@ -21,6 +22,7 @@ type ImboxViewProps = {
   loading: boolean;
   searchRequest: number;
   focusSection?: "new" | "previous";
+  focusSectionRequest?: number;
   selectedId?: string;
   bulkSelectedIds: string[];
   bulkBusy: boolean;
@@ -40,7 +42,25 @@ type ImboxViewProps = {
   onSetAsideGroup: (request: SetAsideGroupMutationRequest) => void;
   hidden?: boolean;
   showSenderAvatars?: boolean;
+  sectioned?: boolean;
+  sectionMailboxes?: SectionedMailboxes;
+  retainedActiveId?: string;
+  onLayoutChange?: (layout: "hey" | "sectioned") => void;
+  onVisiblePostingsChange?: (postings: ImboxPosting[]) => void;
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+  loadMoreError?: string;
+  profileKey?: string;
 };
+
+const sectionTitles: Record<ImboxSectionKey, string> = { active: "Active", replyLater: "Reply Later", setAside: "Set Aside", bubbledUp: "Bubbled Up", previouslySeen: "Previously Seen" };
+const collapseStorageKey = (profile: string) => `hey-agent:imbox-sections:${profile}`;
+function readCollapsedSections(profile: string): ImboxSectionKey[] {
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(collapseStorageKey(profile)) ?? "[]");
+    return Array.isArray(stored) ? IMBOX_SECTION_ORDER.filter((key) => stored.includes(key)) : [];
+  } catch { return []; }
+}
 
 function formatDate(value: string, dayGrouped = false): string {
   if (!value) return "";
@@ -57,7 +77,7 @@ export function mailboxEmptyCopy(boxName: string, imbox: boolean, filtered: bool
   return { title: `${boxName} is empty`, detail: `There are no conversations in ${boxName}.` };
 }
 
-function MailRow({ posting, selectedId, bulkSelected, imbox, dayGrouped, showSenderAvatars, onSelect, onHighlight, onToggleSelection }: { posting: ImboxPosting; selectedId?: string; bulkSelected: boolean; imbox: boolean; dayGrouped: boolean; showSenderAvatars: boolean; onSelect: (posting: ImboxPosting) => void; onHighlight: (id: string) => void; onToggleSelection: (posting: ImboxPosting) => void }) {
+function MailRow({ posting, selectedId, bulkSelected, imbox, dayGrouped, showSenderAvatars, compact = false, onSelect, onHighlight, onToggleSelection }: { posting: ImboxPosting; selectedId?: string; bulkSelected: boolean; imbox: boolean; dayGrouped: boolean; showSenderAvatars: boolean; compact?: boolean; onSelect: (posting: ImboxPosting) => void; onHighlight: (id: string) => void; onToggleSelection: (posting: ImboxPosting) => void }) {
   const selectHint = useShortcutHints()("select");
   const openBindings = useContext(ShortcutContext).find((shortcut) => shortcut.id === "open")?.keys;
   const selfEmail = currentMailEmail();
@@ -72,7 +92,7 @@ function MailRow({ posting, selectedId, bulkSelected, imbox, dayGrouped, showSen
     else onSelect(posting);
   };
   const previewHover = () => appSound.play("hover", "interface", { cooldownMs: 70, retrigger: "restart" });
-  return <button id={`mail-row-${posting.id}`} type="button" role="option" aria-current={selected || undefined} aria-selected={bulkSelected} aria-keyshortcuts={selectHint && !selectHint.includes(" then ") ? selectHint : undefined} className="mail-row" data-posting-id={posting.id} data-selected={selected} data-bulk-selected={bulkSelected} data-unseen={!posting.seen && !bubbledUp} onFocus={() => onHighlight(posting.id)} onPointerEnter={previewHover} onClick={clickRow} onKeyDown={(event) => activateMailRow(event, () => onSelect(posting), openBindings)}>
+  return <button id={`mail-row-${posting.id}`} type="button" role="option" aria-current={selected || undefined} aria-selected={bulkSelected} aria-keyshortcuts={selectHint && !selectHint.includes(" then ") ? selectHint : undefined} className={`mail-row${compact ? " is-compact" : ""}`} data-posting-id={posting.id} data-selected={selected} data-bulk-selected={bulkSelected} data-unseen={!posting.seen && !bubbledUp} onFocus={() => onHighlight(posting.id)} onPointerEnter={previewHover} onClick={clickRow} onKeyDown={(event) => activateMailRow(event, () => onSelect(posting), openBindings)}>
     <span className="mail-state-cell" data-bulk-toggle data-tooltip={bulkSelected ? "Remove from selection" : "Select conversation"} data-shortcut-id="select">
       <span className="mail-selection-mark" data-checked={bulkSelected}>{bulkSelected && <Check size={12} />}</span>
       {!bulkSelected && (bubbledUp ? <span className="bubbled-up-mark" title="Bubbled Up"><ArrowUpCircle size={16} aria-label="Bubbled Up" /></span> : !posting.seen && <span className="unseen-dot" title="Unseen" />)}
@@ -86,29 +106,55 @@ function MailRow({ posting, selectedId, bulkSelected, imbox, dayGrouped, showSen
     </span>
     <span className="conversation-cell">
       <span className="subject-line"><strong title={posting.subject}>{posting.subject}</strong>{posting.kind === "bundle" && <Layers3 size={12} aria-label="Contact bundle" />}{posting.visibleEntryCount > 1 && <span className="entry-count" title={`${posting.visibleEntryCount} ${posting.kind === "bundle" ? "items" : "messages"}`} aria-label={`${posting.visibleEntryCount} ${posting.kind === "bundle" ? "items" : "messages"}`}>({posting.visibleEntryCount})</span>}</span>
-      {posting.summary && <span className="summary-line">— {posting.summary}</span>}
+      {!compact && posting.summary && <span className="summary-line">— {posting.summary}</span>}
     </span>
     <span className="updated-cell"><time dateTime={posting.createdAt} title={posting.createdAt && Number.isFinite(Date.parse(posting.createdAt)) ? new Date(posting.createdAt).toLocaleString() : undefined}>{formatDate(posting.createdAt, dayGrouped)}</time></span>
   </button>;
 }
 
-export default function ImboxView({ mailboxKey, result, overview, loading, searchRequest, focusSection = "new", selectedId, bulkSelectedIds, bulkBusy, commandPaletteOpen, onSelect, onHighlight, onToggleSelection, onBulkAction, helperActions = [], onReadTogether, onReplyTogether, onOrganizeSelection, onClearSelection, onRefresh, onNavigate, setAsideGroupTarget, onSetAsideGroup, hidden = false, showSenderAvatars = false }: ImboxViewProps) {
+export default function ImboxView({ mailboxKey, result, overview, loading, searchRequest, focusSection = "new", focusSectionRequest = 0, selectedId, bulkSelectedIds, bulkBusy, commandPaletteOpen, onSelect, onHighlight, onToggleSelection, onBulkAction, helperActions = [], onReadTogether, onReplyTogether, onOrganizeSelection, onClearSelection, onRefresh, onNavigate, setAsideGroupTarget, onSetAsideGroup, hidden = false, showSenderAvatars = false, sectioned = false, sectionMailboxes, retainedActiveId, onLayoutChange, onVisiblePostingsChange, onLoadMore, loadingMore = false, loadMoreError, profileKey = "default" }: ImboxViewProps) {
   const hint = useShortcutHints();
   const [query, setQuery] = useState("");
   const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const previousRef = useRef<HTMLDivElement>(null);
   const bulkMenu = useRef<HTMLSpanElement>(null);
+  const mailList = useRef<HTMLDivElement>(null);
+  const olderSentinel = useRef<HTMLDivElement>(null);
+  const lastPageRequest = useRef<string | undefined>(undefined);
+  const lastLocalReveal = useRef<string | undefined>(undefined);
+  const lastVisibleSequence = useRef<string | undefined>(undefined);
+  const lastSectionFocus = useRef<string | undefined>(undefined);
+  const [collapseState, setCollapseState] = useState(() => ({ profileKey, keys: readCollapsedSections(profileKey) }));
+  const collapsed = useMemo(() => collapseState.profileKey === profileKey ? collapseState.keys : readCollapsedSections(profileKey), [collapseState, profileKey]);
+  const [seenBatch, setSeenBatch] = useState({ profileKey, count: PREVIOUSLY_SEEN_BATCH });
+  const seenLimit = seenBatch.profileKey === profileKey ? seenBatch.count : PREVIOUSLY_SEEN_BATCH;
   const isImbox = result?.boxKey === "imbox";
+  const useSectioned = sectioned && mailboxKey === "imbox";
+  const combinedMailboxes = useMemo(() => ({ ...sectionMailboxes, imbox: result }), [sectionMailboxes, result]);
+  const sectionedGroups = useMemo(() => {
+    const groups = groupSectionedImbox(combinedMailboxes, retainedActiveId);
+    const normalized = query.trim().toLowerCase();
+    if (normalized) for (const key of IMBOX_SECTION_ORDER) groups[key] = groups[key].filter((posting) => [posting.subject, posting.summary, posting.sender.name, posting.sender.email ?? "", ...posting.contacts.flatMap((contact) => [contact.name, contact.email ?? ""])].some((value) => value.toLowerCase().includes(normalized)));
+    return groups;
+  }, [combinedMailboxes, retainedActiveId, query]);
   const postings = useMemo(() => {
+    if (useSectioned) return IMBOX_SECTION_ORDER.flatMap((key) => sectionedGroups[key]);
     const normalized = query.trim().toLowerCase();
     if (!normalized) return result?.postings ?? [];
     return (result?.postings ?? []).filter((posting) => [posting.subject, posting.summary, ...posting.contacts.flatMap((contact) => [contact.name, contact.email ?? ""])].some((value) => value.toLowerCase().includes(normalized)));
-  }, [query, result]);
+  }, [query, result, useSectioned, sectionedGroups]);
   const sections = groupImboxPostings(postings);
   const dayGrouped = mailboxKey === "feedbox" || mailboxKey === "trailbox";
   const dayHeaders = dayGrouped ? mailDayHeaders(postings) : new Map<string, string>();
-  const showSections = isImbox && result?.status === "ready" && !query.trim() && postings.length > 0;
+  const showSections = !useSectioned && isImbox && result?.status === "ready" && !query.trim() && postings.length > 0;
+  const showSectioned = useSectioned && result?.status === "ready";
+  const visibleSections = useMemo(() => Object.fromEntries(IMBOX_SECTION_ORDER.map((key) => [key, collapsed.includes(key) ? [] : key === "previouslySeen" && !query.trim() ? sectionedGroups[key].slice(0, seenLimit) : sectionedGroups[key]])) as Record<ImboxSectionKey, ImboxPosting[]>, [collapsed, sectionedGroups, seenLimit, query]);
+  const activeRowVisible = !hidden && selectedId && (useSectioned
+    ? showSectioned && IMBOX_SECTION_ORDER.some((key) => visibleSections[key].some((posting) => posting.id === selectedId))
+    : postings.some((posting) => posting.id === selectedId));
+  const hasOlder = sectionedGroups.previouslySeen.length > seenLimit || Boolean(result?.nextPage);
+  const pagingAllowed = showSectioned && !hidden && !loading && !query.trim() && !collapsed.includes("previouslySeen");
   const isSetAside = result?.boxKey === "asidebox" && !query;
   const trailVisit = usePaperTrailVisit(mailboxKey, result, hidden, loading);
   const visitBoundary = result?.status === "ready" && !query.trim() ? paperTrailVisitBoundary(postings, trailVisit?.cutoff) : undefined;
@@ -123,10 +169,70 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   }, [postings]);
   const emptyCopy = mailboxEmptyCopy(result?.boxName ?? "Mailbox", isImbox, Boolean(query));
 
+  const toggleSection = (key: ImboxSectionKey) => {
+    const keys = collapsed.includes(key) ? collapsed.filter((value) => value !== key) : [...collapsed, key];
+    setCollapseState({ profileKey, keys });
+    try { window.localStorage.setItem(collapseStorageKey(profileKey), JSON.stringify(keys)); } catch { /* A storage restriction must not prevent collapsing a section. */ }
+  };
+  const revealOlder = useCallback(() => {
+    if (!pagingAllowed || loadingMore || loadMoreError || !hasOlder || document.visibilityState === "hidden") return;
+    const local = sectionedGroups.previouslySeen.length > seenLimit;
+    const requestKey = `${profileKey}:${local ? `local:${seenLimit}` : `page:${result?.nextPage}`}`;
+    const request = local ? lastLocalReveal : lastPageRequest;
+    if (request.current === requestKey) return;
+    if (!local && !onLoadMore) return;
+    request.current = requestKey;
+    if (local) setSeenBatch({ profileKey, count: seenLimit + PREVIOUSLY_SEEN_BATCH });
+    else onLoadMore?.();
+  }, [pagingAllowed, loadingMore, loadMoreError, hasOlder, sectionedGroups.previouslySeen.length, seenLimit, profileKey, result?.nextPage, onLoadMore]);
+  useEffect(() => {
+    if (!showSectioned) { lastVisibleSequence.current = undefined; return; }
+    if (hidden || !onVisiblePostingsChange) return;
+    const visible = IMBOX_SECTION_ORDER.flatMap((key) => visibleSections[key]);
+    const sequence = JSON.stringify([profileKey, visible.map((posting) => posting.id)]);
+    if (lastVisibleSequence.current === sequence) return;
+    lastVisibleSequence.current = sequence;
+    onVisiblePostingsChange(visible);
+  }, [showSectioned, hidden, profileKey, visibleSections, onVisiblePostingsChange]);
+  useEffect(() => {
+    if (!showSectioned || loading) { lastPageRequest.current = undefined; lastLocalReveal.current = undefined; }
+  }, [showSectioned, loading]);
+  useEffect(() => {
+    // A cancelled history read can finish without advancing its cursor. Loading
+    // and error state gate further reads; this ref only bridges the first render.
+    if (!loadingMore) lastPageRequest.current = undefined;
+  }, [loadingMore]);
+  useEffect(() => {
+    if (!pagingAllowed || !hasOlder || loadingMore || loadMoreError || !olderSentinel.current || !mailList.current || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver((entries) => { if (entries.some((entry) => entry.isIntersecting)) revealOlder(); }, { root: mailList.current, rootMargin: "0px 0px 160px 0px" });
+    observer.observe(olderSentinel.current);
+    return () => observer.disconnect();
+  }, [pagingAllowed, hasOlder, loadingMore, loadMoreError, revealOlder]);
+
   useEffect(() => { if (searchRequest > 0) searchRef.current?.focus(); }, [searchRequest]);
   useEffect(() => {
-    if (focusSection === "previous" && isImbox) requestAnimationFrame(() => previousRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
-  }, [focusSection, isImbox]);
+    const request = `${profileKey}:${isImbox}:${useSectioned}:${showSectioned}:${focusSection}:${useSectioned ? focusSectionRequest : 0}`;
+    if (lastSectionFocus.current === request) return;
+    if (focusSection !== "previous" || !isImbox) { lastSectionFocus.current = request; return; }
+    if (showSectioned && collapsed.includes("previouslySeen")) {
+      const keys = collapsed.filter((key) => key !== "previouslySeen");
+      setCollapseState({ profileKey, keys });
+      try { window.localStorage.setItem(collapseStorageKey(profileKey), JSON.stringify(keys)); } catch { /* Keep navigation available when preferences cannot be saved. */ }
+      // The next effect sees the expanded rows committed to the DOM. Keep this
+      // request pending until then so focus cannot land on the empty heading.
+      return;
+    }
+    lastSectionFocus.current = request;
+    requestAnimationFrame(() => {
+      if (lastSectionFocus.current !== request) return;
+      previousRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+      if (showSectioned) {
+        const target = previousRef.current?.querySelector<HTMLButtonElement>(".mail-row")
+          ?? previousRef.current?.querySelector<HTMLButtonElement>(".sectioned-imbox-heading button");
+        target?.focus({ preventScroll: true });
+      }
+    });
+  }, [focusSection, focusSectionRequest, isImbox, useSectioned, showSectioned, profileKey, collapsed]);
   useEffect(() => {
     if (!selectedId || hidden) return;
     const row = document.getElementById(`mail-row-${selectedId}`);
@@ -163,12 +269,13 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   }, [hidden, setAsideGroupTarget, postings]);
 
   const bulkSelection = useMemo(() => new Set(bulkSelectedIds), [bulkSelectedIds]);
-  const renderRows = (rows: ImboxPosting[]) => rows.map((posting) => <Fragment key={posting.id}>
+  const renderRows = (rows: ImboxPosting[], compact = false) => rows.map((posting) => <Fragment key={posting.id}>
     {dayHeaders.has(posting.id) && <div className="mail-day-heading" role="separator" aria-label={dayHeaders.get(posting.id)}><span>{dayHeaders.get(posting.id)}</span></div>}
-    <MailRow showSenderAvatars={showSenderAvatars} posting={posting} selectedId={selectedId} bulkSelected={bulkSelection.has(posting.id)} imbox={isImbox} dayGrouped={dayGrouped} onSelect={onSelect} onHighlight={onHighlight} onToggleSelection={onToggleSelection} />
+    <MailRow showSenderAvatars={showSenderAvatars} compact={compact} posting={posting} selectedId={selectedId} bulkSelected={bulkSelection.has(posting.id)} imbox={isImbox} dayGrouped={dayGrouped} onSelect={onSelect} onHighlight={onHighlight} onToggleSelection={onToggleSelection} />
   </Fragment>);
   const selectedPostings = postings.filter((posting) => bulkSelection.has(posting.id));
-  const selectionToggle = (id: ShortcutId) => mailToggle(id, bulkSelectedIds, mailboxKey, selectedPostings);
+  const selectionSource = useSectioned ? sectionedSelectionSource(combinedMailboxes, bulkSelectedIds) : mailboxKey;
+  const selectionToggle = (id: ShortcutId) => mailToggle(id, bulkSelectedIds, selectionSource, selectedPostings);
   const selectedGrouped = selectedPostings.some((posting) => Boolean(posting.boxGroupId));
   const renderSetAsideRows = () => <div className="set-aside-groups">
     {setAsideGroups.groups.map(([groupId, rows], index) => <section key={groupId} className="set-aside-group" data-set-aside-group={groupId} data-targeted={setAsideGroupTarget === groupId || undefined}>
@@ -177,32 +284,55 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
     </section>)}
     {setAsideGroups.ungrouped.length > 0 && <section className="set-aside-group is-ungrouped"><header><span><strong>Not grouped</strong><small>{setAsideGroups.ungrouped.length} {setAsideGroups.ungrouped.length === 1 ? "conversation" : "conversations"}</small></span></header>{renderRows(setAsideGroups.ungrouped)}</section>}
   </div>;
+  const renderSectionedImbox = () => IMBOX_SECTION_ORDER.map((key) => {
+    const title = sectionTitles[key];
+    const isPrevious = key === "previouslySeen";
+    const source = key === "replyLater" ? sectionMailboxes?.laterbox : key === "setAside" ? sectionMailboxes?.asidebox : result;
+    const sourceReady = source?.status === "ready";
+    const count = sectionedGroups[key].length;
+    const shown = Math.min(count, seenLimit);
+    const partial = !query.trim() && (isPrevious ? hasOlder : (key === "replyLater" || key === "setAside") && Boolean(source?.nextPage));
+    const countLabel = sourceReady ? isPrevious && partial ? collapsed.includes(key) ? `${count} loaded` : `${shown} shown` : `${count}${partial ? "+" : ""}` : undefined;
+    const emptyLabel = key === "active" ? "Nothing is asking for your attention." : key === "bubbledUp" ? "No reminders have returned." : key === "previouslySeen" ? "Seen conversations stay here in Imbox." : `No conversations in ${title}.`;
+    return <section key={key} ref={isPrevious ? previousRef : undefined} className={`sectioned-imbox-group${isPrevious ? " is-previous" : ""}`} data-section={key} role="group" aria-label={title}>
+      <h2 className="sectioned-imbox-heading"><button type="button" aria-expanded={!collapsed.includes(key)} aria-controls={`imbox-section-${key}`} onClick={() => toggleSection(key)}><ChevronDown size={15} aria-hidden="true" /><span>{title}</span>{countLabel !== undefined && <em>{countLabel}</em>}</button></h2>
+      {!collapsed.includes(key) && <div id={`imbox-section-${key}`}>
+        {!sourceReady ? <p className="sectioned-imbox-notice" role="status">{!source ? `Loading ${title}…` : `${title} unavailable. ${source.detail ?? "Refresh to try again."}`}</p> : visibleSections[key].length ? renderRows(visibleSections[key], isPrevious) : <p className="sectioned-imbox-notice">{query.trim() ? "No matching conversations." : emptyLabel}</p>}
+        {isPrevious && !query.trim() && <>
+          {hasOlder && <div ref={olderSentinel} className="sectioned-imbox-sentinel" aria-hidden="true" />}
+          {loadingMore && <p className="sectioned-imbox-notice" role="status">Loading older conversations…</p>}
+          {loadMoreError && <div className="sectioned-imbox-pagination-error" role="status"><span>{loadMoreError}</span><button type="button" className="toolbar-button" disabled={loadingMore} onClick={() => { lastPageRequest.current = `${profileKey}:page:${result?.nextPage}`; onLoadMore?.(); }}>Retry</button></div>}
+        </>}
+      </div>}
+    </section>;
+  });
 
-  return <section className="panel imbox-panel" aria-label={result?.boxName ?? "Mail"} hidden={hidden}>
+  return <section className="panel imbox-panel" aria-label={result?.boxName ?? "Mail"} hidden={hidden} data-layout={useSectioned ? "sectioned" : "hey"}>
     <header className="panel-header imbox-titlebar">
       <div className="title-cluster"><h1>{result?.boxName ?? "Mail"}</h1>{!isImbox && <span className="title-count">{result?.postings.length ?? 0}</span>}</div>
       <div className="imbox-header-tools"><label className="mail-search" data-tooltip={`Search ${result?.boxName ?? "mail"}`}><Search size={15} /><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${result?.boxName ?? "mail"}`} /></label></div>
-      <div className="header-actions"><button className="icon-button" type="button" aria-label={`Refresh ${result?.boxName ?? "mail"}`} data-tooltip={`Refresh ${result?.boxName ?? "mail"}`} onClick={onRefresh} disabled={loading}><RefreshCw size={15} className={loading ? "is-spinning" : ""} /></button></div>
+      <div className="header-actions">{mailboxKey === "imbox" && onLayoutChange && <div className="imbox-layout-switch" role="group" aria-label="Imbox layout"><button type="button" aria-pressed={!useSectioned} onClick={() => onLayoutChange("hey")}>HEY</button><button type="button" aria-pressed={useSectioned} onClick={() => onLayoutChange("sectioned")}>Sectioned</button></div>}<button className="icon-button" type="button" aria-label={`Refresh ${result?.boxName ?? "mail"}`} data-tooltip={`Refresh ${result?.boxName ?? "mail"}`} onClick={onRefresh} disabled={loading}><RefreshCw size={15} className={loading ? "is-spinning" : ""} /></button></div>
     </header>
-    <div className="mail-list" data-imbox={isImbox} role="listbox" aria-label={`${result?.boxName ?? "Mail"} conversations`} aria-activedescendant={selectedId ? `mail-row-${selectedId}` : undefined}>
+    <div ref={mailList} className="mail-list" data-imbox={isImbox} role="listbox" aria-label={`${result?.boxName ?? "Mail"} conversations`} aria-activedescendant={activeRowVisible ? `mail-row-${selectedId}` : undefined} onScroll={(event) => { const list = event.currentTarget; if (list.scrollHeight - list.scrollTop - list.clientHeight < 160) revealOlder(); }}>
       {loading && !result && <div className="loading-list">{Array.from({ length: 7 }, (_, index) => <div className="loading-row" key={index} />)}</div>}
       {!loading && result?.status !== "ready" && <div className="empty-state"><span className="empty-mark"><Circle size={18} /></span><h2>{result?.status === "needs-auth" ? "HEY needs your sign-in" : "Mailbox unavailable"}</h2><p>{result?.detail ?? "Check the local HEY CLI and try again."}</p><button type="button" className="primary-button" onClick={onRefresh}>Try again</button></div>}
 
       {isImbox && !query && Boolean(overview?.screener.entries.length) && <button type="button" className="imbox-screener-callout" onClick={() => onNavigate("screener")}><span><span className="screener-thumbs" aria-hidden><ThumbsUp size={15} /><ThumbsDown size={15} /></span><strong>Screen {overview!.screener.entries.length} first-time {overview!.screener.entries.length === 1 ? "sender" : "senders"}</strong></span></button>}
 
+      {showSectioned && renderSectionedImbox()}
       {showSections && sections.bubbledUp.length > 0 && <div className="imbox-section is-bubbled" role="group" aria-label="Bubbled Up"><div className="imbox-section-heading" data-section="bubbled"><span>Bubbled Up</span><em>{sections.bubbledUp.length}</em></div>{renderRows(sections.bubbledUp)}</div>}
       {showSections && <div className="imbox-section-heading" data-section="new"><span>New For You</span><em>{sections.newForYou.length}</em></div>}
-      {isSetAside ? renderSetAsideRows() : visitBoundary !== undefined ? <>
+      {!useSectioned && (isSetAside ? renderSetAsideRows() : visitBoundary !== undefined ? <>
         {renderRows(postings.slice(0, visitBoundary))}
         <div className="mail-visit-divider" role="separator" aria-label="New since you last visited" title="Since your previous Paper Trail visit in HEY Agent. Tracked separately for this account on this device, not synced with HEY."><span>New since you last visited</span></div>
         {renderRows(postings.slice(visitBoundary))}
-      </> : renderRows(showSections ? sections.newForYou : postings)}
+      </> : renderRows(showSections ? sections.newForYou : postings))}
       {trailVisit?.saved === false && <p className="mail-visit-notice" role="status">Visit tracking couldn’t be saved on this device. The divider may be out of date next time. Restart HEY Agent to retry.</p>}
-      {!loading && result?.status === "ready" && postings.length === 0 && <div className="empty-state"><span className="empty-mark is-done"><Check size={18} /></span><h2>{emptyCopy.title}</h2><p>{emptyCopy.detail}</p></div>}
+      {!useSectioned && !loading && result?.status === "ready" && postings.length === 0 && <div className="empty-state"><span className="empty-mark is-done"><Check size={18} /></span><h2>{emptyCopy.title}</h2><p>{emptyCopy.detail}</p></div>}
 
       {showSections && <div ref={previousRef} className="imbox-section is-previous" role="group" aria-label="Previously Seen"><div className="imbox-section-heading" data-section="previous"><span>Previously Seen</span><em>{sections.previouslySeen.length}</em></div>{sections.previouslySeen.length ? renderRows(sections.previouslySeen) : <p className="imbox-section-empty">Seen conversations stay here in Imbox.</p>}</div>}
 
-      {isImbox && !query && overview && overview.replyLater.count > 0 && <section className="imbox-reply-later" aria-label="Reply Later">
+      {!useSectioned && isImbox && !query && overview && overview.replyLater.count > 0 && <section className="imbox-reply-later" aria-label="Reply Later">
         <button type="button" data-tooltip={`Open ${overview.replyLater.count} Reply Later ${overview.replyLater.count === 1 ? "conversation" : "conversations"}`} data-shortcut-id="nav-later" data-tooltip-side="top" onClick={() => onNavigate("reply-later")}>
           <span className="reply-later-mark" aria-hidden><Reply size={19} /><Clock3 size={11} /></span>
           <span className="reply-later-card">
@@ -214,6 +344,7 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
     </div>
     {bulkSelectedIds.length > 0 ? <div id="bulk-action-bar" className="bulk-action-bar" role="toolbar" aria-label={`${bulkSelectedIds.length} selected conversations`}>
       <strong>{bulkBusy ? `Updating ${bulkSelectedIds.length}…` : `${bulkSelectedIds.length} selected`}</strong>
+      {useSectioned && <button data-tooltip="Done with selection" data-shortcut-id="seen" type="button" className="toolbar-button sectioned-done-button" onClick={() => onBulkAction("seen")} disabled={bulkBusy}><Check size={14} /><span>Done</span>{hint("seen") && <kbd>{hint("seen")}</kbd>}</button>}
       {isSetAside && <button type="button" className="primary-button" onClick={() => onSetAsideGroup({ action: "create", postingIds: bulkSelectedIds })} disabled={bulkBusy}><FolderPlus size={14} /> New group</button>}
       {isSetAside && <button type="button" className="toolbar-button" onClick={() => onSetAsideGroup({ action: "remove", postingIds: bulkSelectedIds })} disabled={bulkBusy || !selectedGrouped}><Ungroup size={14} /> Ungroup</button>}
       <button data-tooltip="Read Together" data-shortcut-id="read-together" type="button" className="primary-button" onClick={onReadTogether} disabled={bulkBusy}><Rows3 size={14} /> Read Together {hint("read-together") && <kbd>{hint("read-together")}</kbd>}</button>
@@ -241,7 +372,7 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
           <button data-tooltip={selectionToggle("aside")?.label} data-shortcut-id="aside" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("aside"); }}><FileClock size={14} /><span>{selectionToggle("aside")?.label}</span>{hint("aside") && <kbd>{hint("aside")}</kbd>}</button>
           <button data-tooltip={selectionToggle("bubble")?.label} data-shortcut-id="bubble" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("bubble"); }}><ArrowUpCircle size={14} /><span>{selectionToggle("bubble")?.label}</span>{hint("bubble") && <kbd>{hint("bubble")}</kbd>}</button>
           <span className="bulk-menu-separator" role="separator" />
-          <button data-tooltip="Mark selection seen" data-shortcut-id="seen" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("seen"); }}><Eye size={14} /><span>Mark seen</span>{hint("seen") && <kbd>{hint("seen")}</kbd>}</button>
+          <button data-tooltip={useSectioned ? "Done with selection" : "Mark selection seen"} data-shortcut-id="seen" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("seen"); }}><Eye size={14} /><span>{useSectioned ? "Done" : "Mark seen"}</span>{hint("seen") && <kbd>{hint("seen")}</kbd>}</button>
           <button data-tooltip={selectionToggle("unread")?.label} data-shortcut-id="unread" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("unread"); }}><EyeOff size={14} /><span>{selectionToggle("unread")?.label}</span>{hint("unread") && <kbd>{hint("unread")}</kbd>}</button>
           <button data-tooltip="Ignore selection" data-shortcut-id="bulk-ignore" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("bulk-ignore"); }}><BellOff size={14} /><span>Ignore</span>{hint("bulk-ignore") && <kbd>{hint("bulk-ignore")}</kbd>}</button>
           <button data-tooltip="Stop ignoring selection" data-shortcut-id="stop-ignoring" type="button" role="menuitem" onClick={() => { setBulkMenuOpen(false); onBulkAction("stop-ignoring"); }}><Bell size={14} /><span>Stop ignoring</span>{hint("stop-ignoring") && <kbd>{hint("stop-ignoring")}</kbd>}</button>
@@ -255,6 +386,6 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
       </span>
       <button type="button" className="icon-button" aria-label="Clear selection" data-tooltip="Clear selection" onClick={onClearSelection} disabled={bulkBusy}><span aria-hidden>×</span></button>
     </div> : null}
-    <footer className="list-footer"><span>{([["next", "next"], ["previous", "previous"], ["select", "select"], ["open", "open"], ["forward", "forward"], ["compose", "compose"], ["commands", "commands"]] as const).map(([id, label]) => hint(id) ? <span key={id}><kbd>{hint(id)}</kbd> {label} </span> : null)}</span></footer>
+    <footer className="list-footer"><span>{([["next", "next"], ["previous", "previous"], ["select", "select"], ["open", "open"], ["forward", "forward"], ["compose", "compose"], ["commands", "commands"]] as const).map(([id, label]) => hint(id) ? <span key={id}><kbd>{hint(id)}</kbd> {label} </span> : null)}{useSectioned && hint("seen") && <span><kbd>{hint("seen")}</kbd> Done </span>}</span></footer>
   </section>;
 }

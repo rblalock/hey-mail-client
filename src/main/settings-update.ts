@@ -13,6 +13,7 @@ function isSettingsUpdate(value: unknown): value is AppSettingsUpdate {
   const update = value as Partial<AppSettingsUpdate>;
   if (update.shortcutEdit !== undefined && (!update.shortcutEdit || typeof update.shortcutEdit.id !== "string" || update.shortcutEdit.bindings !== null && !Array.isArray(update.shortcutEdit.bindings))) return false;
   if (update.showSenderAvatars !== undefined && typeof update.showSenderAvatars !== "boolean") return false;
+  if (update.imboxLayout !== undefined && update.imboxLayout !== "hey" && update.imboxLayout !== "sectioned") return false;
   if (update.mailCache !== undefined) {
     const cache = update.mailCache;
     if (!cache || typeof cache !== "object" || Array.isArray(cache)) return false;

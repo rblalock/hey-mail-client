@@ -1,13 +1,14 @@
 import type {
   BulkReplyPreview, BulkReplySendRequest, BulkReplySendResult, BulkReplyUndoResult, ImboxPosting, ImboxResult, MailContact, MailContactDetail, MailDraft, MailDraftUpdate, MailLibraryKind, MailLibraryResult, MailMutationRequest, MailMutationResult,
   MailLibrarySourceResult, MailOrganization, MailOrganizationItem, MailOrganizationMutationRequest, MailOrganizationTarget, MailOverview, MailReplyContext, MailSearchFilters, MailSearchOption, MailSearchRequest, MailSearchResult, MailSendRequest, MailSendResult, MailThread, MailThreadListing, MailboxKey, SetAsideGroupMutationRequest,
-  ScreenerDecisionRequest, ScreenerResult, ThreadEntry, MailLibraryThreads,
+  ScreenerDecisionRequest, ScreenerResult, ThreadEntry, MailLibraryThreads, MailboxListOptions,
 } from "../shared/contracts";
 import { parseThreadHtmlDocument } from "./email-html";
 import { listMailAttachments, withMailAttachments } from "./mail-attachments";
 import { applyExplicitSenderName, mailContactFrom, resolveMailSender } from "./mail-identity";
 import { findExecutable, runFile, runFileWithInput } from "./profile-process";
 import { isHeyAuthenticationFailure as authFailure } from "./hey-errors";
+import { completeMail, completionState } from "./mail-completion";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -119,12 +120,27 @@ const MAILBOXES = new Set<MailboxKey>(["imbox", "feedbox", "trailbox", "asidebox
 const MOVE_DESTINATIONS = new Set<MailboxKey>(["imbox", "feedbox", "trailbox", "asidebox", "laterbox"]);
 const SCREENER_DESTINATIONS = new Set<MailboxKey>(["imbox", "feedbox", "trailbox"]);
 
-export function mailboxCommand(box: MailboxKey): string[] {
-  return box === "asidebox" ? ["set-aside", "view", "--all", "--json"] : ["box", "view", box, "--all", "--json"];
+export function mailboxListOptions(value: unknown): MailboxListOptions {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid HEY mailbox options.");
+  const { page, paginated } = value as MailboxListOptions;
+  if (paginated !== undefined && typeof paginated !== "boolean") throw new Error("Invalid HEY mailbox pagination.");
+  // Match library cursor support: opaque values, including next_history_url, are CLI arguments.
+  if (page !== undefined && (typeof page !== "string" || !page.trim() || page.length > 4096 || /[\x00-\x1f\x7f]/.test(page))) throw new Error("Invalid HEY mailbox page.");
+  if (page !== undefined && paginated !== true) throw new Error("A mailbox page requires pagination.");
+  return { ...(page === undefined ? {} : { page }), ...(paginated === undefined ? {} : { paginated }) };
 }
 
-export async function listMailbox(box: MailboxKey, env: NodeJS.ProcessEnv = process.env): Promise<ImboxResult> {
+export function mailboxCommand(box: MailboxKey, options?: MailboxListOptions): string[] {
   if (!MAILBOXES.has(box)) throw new Error("Invalid HEY mailbox.");
+  const { page, paginated } = mailboxListOptions(options);
+  if (paginated && box !== "imbox") throw new Error("Mailbox pagination is available for the Imbox.");
+  const source = box === "asidebox" ? ["set-aside", "view"] : ["box", "view", box];
+  return [...source, ...(paginated ? page === undefined ? [] : ["--page", page] : ["--all"]), "--json"];
+}
+
+export async function listMailbox(box: MailboxKey, env: NodeJS.ProcessEnv = process.env, options?: MailboxListOptions): Promise<ImboxResult> {
+  const args = mailboxCommand(box, options);
   const executable = await findExecutable("hey", env);
   if (!executable) {
     return {
@@ -137,11 +153,33 @@ export async function listMailbox(box: MailboxKey, env: NodeJS.ProcessEnv = proc
   }
 
   try {
-    const { stdout } = await runFile(executable, mailboxCommand(box), {
-      env,
-      timeoutMs: 30_000,
-    });
-    return parseImboxJson(stdout, box);
+    const readPage = async (command: string[]) => {
+      const { stdout } = await runFile(executable, command, { env, timeoutMs: 30_000 });
+      return parseImboxJson(stdout, box);
+    };
+    let result = await readPage(args);
+    if (box !== "imbox" || !options?.paginated || options.page !== undefined) return result;
+
+    // HEY CLI 1.7's bubble_list.go reads the bubbled-up prefix of Imbox; mail/page.go
+    // documents seen postings ordered last. Read through that active prefix, which
+    // can span several pages, then leave the remaining history behind its cursor.
+    const postings = new Map(result.postings.map((posting) => [posting.id, posting]));
+    const visited = new Set<string>();
+    let pages = 1;
+    while (result.nextPage && !result.postings.some((posting) => posting.seen && !posting.bubbledUp)) {
+      if (pages >= 101 || visited.has(result.nextPage) || result.postings.length === 0) {
+        throw new Error("Unable to load all pending Imbox conversations. Refresh before relying on the Active section.");
+      }
+      visited.add(result.nextPage);
+      result = await readPage(mailboxCommand(box, { paginated: true, page: result.nextPage }));
+      if (result.nextPage && result.postings.every((posting) => postings.has(posting.id))
+        && !result.postings.some((posting) => posting.seen && !posting.bubbledUp)) {
+        throw new Error("Unable to load all pending Imbox conversations: pagination stopped making progress.");
+      }
+      for (const posting of result.postings) postings.set(posting.id, posting);
+      pages += 1;
+    }
+    return { ...result, postings: [...postings.values()] };
   } catch (error) {
     return {
       status: authFailure(error) ? "needs-auth" : "unavailable",
@@ -154,13 +192,15 @@ export async function listMailbox(box: MailboxKey, env: NodeJS.ProcessEnv = proc
 }
 
 export function parseImboxJson(stdout: string, boxKey: MailboxKey = "imbox"): ImboxResult {
-  const data = envelopeData(parseJson(stdout));
+  const payload = parseJson(stdout);
+  if (payload.ok === false) throw new Error(stringValue(record(payload.error).message, "HEY could not read this mailbox."));
+  const data = envelopeData(payload);
   const postings = Array.isArray(data.postings) ? data.postings.map(postingFrom) : [];
   return {
     status: "ready",
     boxKey,
     boxName: stringValue(data.name, "Imbox"),
-    ...(data.next_page === undefined ? {} : { nextPage: stringValue(data.next_page) }),
+    ...(stringValue(data.next_page) ? { nextPage: stringValue(data.next_page) } : {}),
     postings,
   };
 }
@@ -803,8 +843,16 @@ function inverseMutation(request: MailMutationRequest): MailMutationRequest | un
 }
 
 export async function mutateMail(request: MailMutationRequest, env: NodeJS.ProcessEnv = process.env): Promise<MailMutationResult> {
+  const completing = request.operation === "done" || request.operation === "undo-done";
+  if (completing) completionState(request);
   const executable = await findExecutable("hey", env);
   if (!executable) throw new Error("HEY CLI is unavailable.");
+  if (completing) return completeMail(request, async (args) => {
+    const { stdout } = await runFile(executable, args, { env, timeoutMs: 20_000 });
+    const payload = parseJson(stdout);
+    if (payload.ok !== true) throw Object.assign(new Error(stringValue(record(payload.error).message, "HEY did not confirm the change.")), { code: payload.code });
+    return payload.data;
+  });
   const args = mutationCommand(request);
   const { stdout } = await runFile(executable, args, { env, timeoutMs: 20_000 });
   const payload = parseJson(stdout);
@@ -815,6 +863,7 @@ export async function mutateMail(request: MailMutationRequest, env: NodeJS.Proce
 }
 
 export function mutationCommand(request: MailMutationRequest): string[] {
+  if (request.operation === "done" || request.operation === "undo-done") throw new Error("Done requires the completion workflow.");
   const postingIds = assertPostingIds(request.postingIds);
   const args = request.operation === "bubble" ? ["bubble", "up", ...postingIds]
     : request.operation === "bubble-pop" ? ["bubble", "pop", ...postingIds] : [request.operation, ...postingIds];

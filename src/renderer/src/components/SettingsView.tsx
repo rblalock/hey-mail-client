@@ -171,6 +171,7 @@ function MailCacheControls({ settings, visible, onSettings, location }: Pick<Set
 
 export default function SettingsView({ settings, theme, onSettings, onRunHelper, onEditHelper, runnableHelpers, busyHelpers }: SettingsViewProps) {
   const mailCache = settings.mailCache ?? DEFAULT_MAIL_CACHE_SETTINGS;
+  const imboxLayout = settings.imboxLayout ?? "hey";
   const [openSection, setOpenSection] = useState<SectionId | null>(null);
   const toggleSection = (id: SectionId) => {
     appSound.play(openSection === id ? "close" : "open", "interface");
@@ -184,6 +185,8 @@ export default function SettingsView({ settings, theme, onSettings, onRunHelper,
   const [modelError, setModelError] = useState<string>();
   const [savingAppearance, setSavingAppearance] = useState(false);
   const [appearanceError, setAppearanceError] = useState<string>();
+  const [savingImboxLayout, setSavingImboxLayout] = useState(false);
+  const [imboxLayoutError, setImboxLayoutError] = useState<string>();
   const shortcuts = useMemo(() => resolveShortcuts(settings).filter((item) => !item.id.startsWith("session-") || ["session-new", "session-close", "session-next", "session-previous"].includes(item.id)), [settings]);
 
   const refreshStatus = async () => {
@@ -214,6 +217,13 @@ export default function SettingsView({ settings, theme, onSettings, onRunHelper,
     try { onSettings(await window.heyAgent.settings.update({ showSenderAvatars })); }
     catch { setAppearanceError("Could not save this preference. Try again."); }
     finally { setSavingAppearance(false); }
+  };
+
+  const chooseImboxLayout = async (layout: AppSettings["imboxLayout"]) => {
+    setSavingImboxLayout(true); setImboxLayoutError(undefined);
+    try { onSettings(await window.heyAgent.settings.update({ imboxLayout: layout })); }
+    catch { setImboxLayoutError("Could not save the Imbox layout. Try again."); }
+    finally { setSavingImboxLayout(false); }
   };
 
   const saveSound = async (sound: Partial<SoundSettings>, preview?: "toggle-on" | "toggle-off" | "select" | "volume-change") => {
@@ -263,7 +273,12 @@ export default function SettingsView({ settings, theme, onSettings, onRunHelper,
         {appearanceError && <p className="settings-inline-error" role="alert">{appearanceError}</p>}
       </SettingsSection>
 
-      <SettingsSection {...sectionProps("mail")} title="Mail" icon={<Mail size={16} />} summary={mailCache.enabled ? `Local cache · ${mailCache.maxSizeMb} MB` : "Local cache off"}>
+      <SettingsSection {...sectionProps("mail")} title="Mail" icon={<Mail size={16} />} summary={`${imboxLayout === "sectioned" ? "Sectioned" : "HEY"} layout · ${mailCache.enabled ? `Local cache · ${mailCache.maxSizeMb} MB` : "Local cache off"}`}>
+        <div className="mail-cache-settings mail-cache-prefetch">
+          <label className="sound-pack" htmlFor="imbox-layout"><span><strong>Imbox layout</strong></span><select id="imbox-layout" value={imboxLayout} disabled={savingImboxLayout} aria-describedby="imbox-layout-description" onChange={(event) => void chooseImboxLayout(event.currentTarget.value as AppSettings["imboxLayout"])}><option value="hey">HEY</option><option value="sectioned">Sectioned</option></select></label>
+          <p id="imbox-layout-description" className="settings-section-description">HEY keeps the familiar Imbox layout. Sectioned groups Active, Reply Later, Set Aside, and Bubbled Up, with a quieter Previously Seen section.</p>
+          {imboxLayoutError && <p className="settings-inline-error" role="alert">{imboxLayoutError}</p>}
+        </div>
         <MailCacheControls settings={settings} visible={openSection === "mail"} onSettings={onSettings} location={status?.paths.mailCache} />
       </SettingsSection>
 
