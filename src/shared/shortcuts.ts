@@ -6,6 +6,8 @@ import { isNativeEditingBinding } from "./keyboard-scope";
 export type ShortcutId =
   | "commands" | "search" | "compose" | "next" | "previous" | "open" | "back" | "undo-trash"
   | "toggle-navigation" | "toggle-agent" | "focus-agent" | "select-next" | "select-previous"
+  | "split-next" | "split-previous" | "split-create" | "split-create-person" | "split-create-domain" | "split-manage"
+  | `split-go:${string}`
   | "composer-write" | "composer-send" | "composer-save" | "composer-cc" | "composer-bcc" | "composer-attach"
   | "select" | "bulk-actions" | "read-together" | "reply-together" | "bulk-label" | "bulk-collection" | "bulk-imbox" | "bulk-feed" | "bulk-trail" | "bulk-ignore"
   | "reply" | "forward" | "seen" | "later" | "aside" | "bubble" | "unread" | "trash" | "stop-ignoring"
@@ -57,6 +59,12 @@ const CATALOG: ShortcutCatalogEntry[] = [
   { id: "select", label: "Select conversation", hey: ["x"], superhuman: ["x"], scope: "mailbox" },
   { id: "select-next", label: "Extend selection down", hey: ["shift+j", "shift+arrowdown"], superhuman: ["shift+j", "shift+arrowdown"], scope: "mailbox" },
   { id: "select-previous", label: "Extend selection up", hey: ["shift+k", "shift+arrowup"], superhuman: ["shift+k", "shift+arrowup"], scope: "mailbox" },
+  { id: "split-next", label: "Next split", hey: ["tab"], superhuman: ["tab"], scope: "mailbox" },
+  { id: "split-previous", label: "Previous split", hey: ["shift+tab"], superhuman: ["shift+tab"], scope: "mailbox" },
+  { id: "split-create", label: "Create split", hey: [], superhuman: [], scope: "mailbox" },
+  { id: "split-manage", label: "Manage splits", hey: [], superhuman: [], scope: "mailbox" },
+  { id: "split-create-person", label: "Create split from this sender", hey: [], superhuman: [], scope: "conversation" },
+  { id: "split-create-domain", label: "Create split from this sender’s domain", hey: [], superhuman: [], scope: "conversation" },
   { id: "bulk-actions", label: "Focus bulk actions", hey: [";"], superhuman: [";"], scope: "bulk" },
   { id: "read-together", label: "Read Together", hey: ["o"], superhuman: ["o"], scope: "bulk" },
   { id: "reply-together", label: "Reply Together", hey: ["r"], superhuman: ["r"], scope: "bulk" },

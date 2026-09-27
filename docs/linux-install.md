@@ -70,6 +70,15 @@ The install uses the XDG directories when configured; otherwise:
 
 Development and installed builds share these paths. Chat indexes and workspaces are separated under `profiles/<key>` for linked accounts; Settings and Helper definitions remain shared. Pi owns its transcripts and model authentication; HEY owns its login and synced mail/Calendar data. Local app settings, Helpers, and Pi transcripts do not automatically sync between computers.
 
+### Copy settings to another computer
+
+- App preferences, shortcuts, and Helper definitions: `~/.config/hey-agent-app/settings.json`
+- Split rules for an account: `~/.config/hey-agent-app/profiles/<key>/mail-splits.json`
+
+Close the app on both computers before copying these files, then reopen it. The same HEY server and linked account produce the same profile key. Sign in to HEY and set up Pi separately on each computer. Cache, chat history, pending-action files, and window/section preferences stay local.
+
+These JSON files can be copied or synced, but a shared network config with simultaneous writers is not supported. Use one source of truth and sync while the app is closed. Let new split labels finish creating before copying their rules; the saved label IDs refer to the existing HEY labels. Do not sync the whole app configuration directory—it also contains Electron runtime data. Custom XDG paths replace the defaults above.
+
 The app discovers executables from the graphical PATH and standard user-local/mise locations. For a custom installation, launch with `HEY_AGENT_PI_PATH=/absolute/path/to/pi` or `HEY_AGENT_HEY_PATH=/absolute/path/to/hey`; make sure `hey` is also on Pi's PATH so its tool can execute it. If Pi was installed through npm, its `node` must be visible from the graphical session too.
 
 Use Settings to check runtime availability. The launcher log includes the packaged build identity and startup errors; review it before sharing because errors may contain local paths or mail metadata. To see output directly, run the installed AppImage in a terminal.

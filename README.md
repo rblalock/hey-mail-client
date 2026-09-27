@@ -8,6 +8,7 @@ Work through your inbox, plan your day, and get help with the reply you've been 
 
 - Navigate, search, and organize mail with customizable keyboard shortcuts.
 - Choose a sectioned Imbox with Active, Reply Later, Set Aside, and Bubbled Up together. Older read mail loads as you scroll.
+- Create split inboxes for people or domains, backed by HEY labels you can open on mobile.
 - Manage your HEY calendar alongside your conversations.
 - Ask Helpers (Agents) for a Daily Brief, meeting prep, reply coaching, and calendar triage.
 - Create your own Helpers (Agents) with instructions for the work you do often.
@@ -25,6 +26,10 @@ The tested platform is **x86-64 Omarchy** (Intel or AMD). This is an independent
 Move with `J` / `K`, open with `Enter`, and select with `X` or `Shift+J` / `Shift+K`. `Ctrl+K` opens commands and Helpers. Shortcuts are customizable.
 
 Choose **Sectioned** in the Imbox header or Settings → Mail to try the alternate layout. Read Active mail clears to Previously Seen when you leave it; kept mail stays until you press `E` for Done. You can switch back to **HEY** at any time.
+
+Choose **Splits** to create named views for people or domains. Each keeps the same workflow sections. Conversations can appear in several splits; **Remaining** shows those outside your enabled splits. Rules add HEY labels while the app runs, and check older mail as you load it. Disabling or removing a split leaves its label and mail untouched.
+
+Use `Tab` / `Shift+Tab` while focused in the mail list to switch splits. `Ctrl+K` also offers split navigation, creation from the selected conversation’s person or domain, and split settings.
 
 ![Inbox with Bubbled Up, New For You, and Previously Seen sections, two selected conversations, and bulk actions.](docs/screenshots/inbox.png)
 
@@ -90,6 +95,7 @@ HEY-like defaults on Linux. Single-letter shortcuts work outside text fields. Th
 | `K` or `↑` | Previous conversation |
 | `Enter` | Open conversation |
 | `Esc` | Close conversation or clear selection |
+| `Tab` / `Shift+Tab` | Next / previous split when the split mail list has focus |
 | `X` | Toggle selection |
 | `Shift+J` or `Shift+↓` | Extend selection down |
 | `Shift+K` or `Shift+↑` | Extend selection up |

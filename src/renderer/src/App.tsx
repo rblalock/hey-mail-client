@@ -5,7 +5,7 @@ import { useTrashQueue } from "./use-trash-queue";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProfileValue } from "./profile-storage";
 import type {
-  AgentNativeAttachment, AgentObjectLink, AgentWorkspace, AppSettings, BulkReplySendResult, CalendarEvent, ImboxPosting, MailContactDetail, MailLibraryKind, MailMutationRequest, MailOrganizationKind, MailOverview, MailSendResult, MailThread, MailThreadListing, MailboxKey, SetAsideGroupMutationRequest, ThemeSnapshot,
+  AgentNativeAttachment, AgentObjectLink, AgentWorkspace, AppSettings, BulkReplySendResult, CalendarEvent, ImboxPosting, MailContactDetail, MailLibraryItem, MailLibraryKind, MailMutationRequest, MailOrganizationKind, MailOverview, MailSendResult, MailThread, MailThreadListing, MailboxKey, SetAsideGroupMutationRequest, ThemeSnapshot,
 } from "../../shared/contracts";
 import AgentPane from "./components/AgentPane";
 import BulkReplyComposer from "./components/BulkReplyComposer";
@@ -13,6 +13,11 @@ import CalendarView from "./components/CalendarView";
 import CommandPalette from "./components/CommandPalette";
 import DraftsView from "./components/DraftsView";
 import ImboxView from "./components/ImboxView";
+import SplitInboxManager from "./components/SplitInboxManager";
+import SplitInboxTabs from "./components/SplitInboxTabs";
+import type { MailSplitDraft, MailSplitState } from "../../shared/mail-splits";
+import { filterSplitMailboxes, splitDraftFromPosting, splitPendingCounts, splitViewIds } from "./split-mailbox";
+import { canNavigateSplits, isSplitNavigationCommand } from "./split-keyboard";
 import MailComposer from "./components/MailComposer";
 import MailLibrary from "./components/MailLibrary";
 import MailOrganizer from "./components/MailOrganizer";
@@ -134,6 +139,12 @@ export default function App() {
   useEffect(() => { if (bulkSelectedIds.length === 0) selectionRange.current = undefined; }, [bulkSelectedIds.length]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [settingsReady, setSettingsReady] = useState(false);
+  const [splitState, setSplitState] = useState<MailSplitState>({ splits: [], memberships: {}, errors: {} });
+  const [splitLoadError, setSplitLoadError] = useState<string>();
+  const [splitLabelsError, setSplitLabelsError] = useState<string>();
+  const [selectedSplit, setSelectedSplit] = useProfileValue("imbox-split", "all");
+  const [splitManager, setSplitManager] = useState<{ draft?: Partial<MailSplitDraft> }>();
+  const [splitLabels, setSplitLabels] = useState<MailLibraryItem[]>([]);
   const [retainedActiveId, setRetainedActiveId] = useState<string>();
   const [visibleSectionPostings, setVisibleSectionPostings] = useState<ImboxPosting[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -186,17 +197,22 @@ export default function App() {
   const pendingTrashIds = useMemo(() => new Set(trash.items.flatMap((item) => item.request.postingIds)), [trash.items]);
   const sectionMailboxes = useMemo(() => Object.fromEntries(Object.entries(mailboxes)
     .map(([key, result]) => [key, hidePendingTrash(result, pendingTrashIds)])) as MailboxCache, [mailboxes, pendingTrashIds]);
+  const enabledSplits = useMemo(() => splitState.splits.filter((split) => split.enabled), [splitState.splits]);
+  const splitIds = useMemo(() => splitViewIds(splitState), [splitState]);
+  const splitId = splitIds.includes(selectedSplit) ? selectedSplit : "all";
+  const viewSectionMailboxes = useMemo(() => sectionedImbox ? filterSplitMailboxes(sectionMailboxes, splitState, splitId) : sectionMailboxes, [sectionedImbox, sectionMailboxes, splitState, splitId]);
+  const splitCounts = useMemo(() => splitPendingCounts(sectionMailboxes, splitState), [sectionMailboxes, splitState]);
   const mailbox = useMemo(() => {
     const source = activeMailbox ? mailboxes[activeMailbox] : undefined;
     const result = hidePendingTrash(source, pendingTrashIds);
     if (result?.boxKey !== "imbox") return result;
     if (sectionedImbox) {
-      const groups = groupSectionedImbox(sectionMailboxes, selected?.id === retainedActiveId ? retainedActiveId : undefined);
+      const groups = groupSectionedImbox(viewSectionMailboxes, selected?.id === retainedActiveId ? retainedActiveId : undefined);
       return { ...result, postings: [...groups.active, ...groups.replyLater, ...groups.setAside, ...groups.bubbledUp, ...groups.previouslySeen] };
     }
     const { bubbledUp, newForYou, previouslySeen } = groupImboxPostings(result.postings);
     return { ...result, postings: [...bubbledUp, ...newForYou, ...previouslySeen] };
-  }, [activeMailbox, mailboxes, pendingTrashIds, retainedActiveId, sectionedImbox, sectionMailboxes, selected?.id]);
+  }, [activeMailbox, mailboxes, pendingTrashIds, retainedActiveId, sectionedImbox, viewSectionMailboxes, selected?.id]);
   const navigationPostings = useMemo(() => {
     if (!sectionedImbox) return mailbox?.postings ?? [];
     const byId = new Map(mailbox?.postings.map((posting) => [posting.id, posting]));
@@ -321,6 +337,44 @@ export default function App() {
     catch (reason) { setNotice({ message: reason instanceof Error ? reason.message : "Unable to save the Imbox layout." }); }
   }, []);
 
+  const openSplitManager = useCallback((draft?: Partial<MailSplitDraft>) => {
+    setCommandsOpen(false);
+    setSplitManager({ draft });
+    void window.heyAgent.mail.listLibrary("labels").then((result) => { setSplitLabels(result.items); setSplitLabelsError(undefined); }).catch((reason: unknown) => {
+      setSplitLabelsError(reason instanceof Error ? reason.message : "Could not load HEY labels. Close and reopen split settings to retry.");
+    });
+  }, []);
+
+  const chooseSplit = useCallback((id: string, focusMail = false) => {
+    if (!splitIds.includes(id)) return;
+    setSelectedSplit(id);
+    setSelected(undefined);
+    setReadTogether(undefined);
+    setReaderOrigin(undefined);
+    setThreadListing(undefined);
+    setBulkSelectedIds([]);
+    selectionRange.current = undefined;
+    readerSequence.current = [];
+    if (id !== splitId) setVisibleSectionPostings([]);
+    setRetainedActiveId(undefined);
+    if (id !== splitId) setMailboxCursor((current) => ({ ...current, imbox: undefined }));
+    requestAnimationFrame(() => {
+      const target = focusMail
+        ? document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-row') ?? document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-list')
+        : document.querySelector<HTMLElement>('.split-inbox-tabs [aria-selected="true"]');
+      target?.focus({ preventScroll: true });
+    });
+  }, [splitIds, splitId, setSelectedSplit, setSelected]);
+
+  const saveSplit = useCallback(async (draft: MailSplitDraft) => {
+    const state = await window.heyAgent.mail.saveSplit(draft);
+    setSplitState(state);
+    if (draft.enabled) {
+      try { setSettings(await window.heyAgent.settings.update({ imboxLayout: "sectioned" })); }
+      catch { setNotice({ message: "Split saved. The layout preference could not be saved; choose Sectioned in the Imbox header to show it." }); }
+    }
+  }, []);
+
   const loadThread = useCallback(async (topicId: string, options: { force?: boolean; reportError?: boolean } = {}): Promise<MailThread | undefined> => {
     const cached = !options.force ? threadCache.get(topicId) : undefined;
     if (cached && threadCache.isFresh(topicId)) return cached;
@@ -383,9 +437,10 @@ export default function App() {
     if (sectionedImbox) {
       historyCursors.current.clear();
       historyLoaded.current = false;
+      if (enabledSplits.length) void window.heyAgent.mail.refreshSplits().then((state) => { setSplitState(state); setSplitLoadError(undefined); }).catch((reason: unknown) => setSplitLoadError(reason instanceof Error ? reason.message : "Unable to refresh splits."));
     }
     await refresh();
-  }, [refresh, sectionedImbox]);
+  }, [refresh, sectionedImbox, enabledSplits.length]);
 
   const loadThreadListing = useCallback(async (kind: MailThreadListing["kind"], id: string, preserve = false) => {
     const sequence = ++listingRequestSequence.current;
@@ -408,6 +463,16 @@ export default function App() {
       window.heyAgent.agent.getWorkspace().then(setAgentWorkspace).catch((reason: unknown) => setAgentError(reason instanceof Error ? reason.message : "Unable to start HEY Agent.")),
     ]);
     return () => { unsubscribeTheme(); unsubscribeAgent(); };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const receive = (state: MailSplitState) => { if (active) { setSplitState(state); setSplitLoadError(undefined); } };
+    const unsubscribe = window.heyAgent.mail.subscribeSplits(receive);
+    void window.heyAgent.mail.getSplits().then(receive).catch((reason: unknown) => {
+      if (active) setSplitLoadError(reason instanceof Error ? reason.message : "Could not load split settings.");
+    });
+    return () => { active = false; unsubscribe(); };
   }, []);
 
   useEffect(() => appSound.configure(settings.sound), [settings.sound]);
@@ -1096,6 +1161,19 @@ export default function App() {
       return;
     }
     setCommandsOpen(false);
+    if (id === "split-create" || id === "split-manage") { openSplitManager(id === "split-create" ? {} : undefined); return; }
+    if (id === "split-create-person" || id === "split-create-domain") {
+      const target = selected ?? highlightedPosting;
+      const draft = target && splitDraftFromPosting(target, id === "split-create-person" ? "person" : "domain", window.heyAgent.profiles.current.active?.email);
+      if (draft) openSplitManager(draft);
+      return;
+    }
+    if (id.startsWith("split-go:")) { chooseSplit(id.slice("split-go:".length), true); return; }
+    if (id === "split-next" || id === "split-previous") {
+      const index = splitIds.indexOf(splitId);
+      chooseSplit(splitIds[(index + (id === "split-next" ? 1 : -1) + splitIds.length) % splitIds.length]!, true);
+      return;
+    }
     if (id === "undo-trash") { if (notice?.undo) void undo(); else void undoTrash(); return; }
     const helperId = helperIdFromCommand(id);
     if (helperId) {
@@ -1207,15 +1285,22 @@ export default function App() {
     if (toggle) void mutate(toggle.request);
     if (id === "stop-ignoring") void mutate({ operation: "stop-ignoring", postingIds: [target.id] });
     if (id === "trash") void mutate({ operation: "trash", postingIds: [target.id], sourceBox: postingSource(target) });
-  }, [activeMailbox, agentRailOpen, agentWorkspace, bulkSelectedIds, closeReader, highlightedId, launchHelper, mailbox, moveCursor, moveThreadSelection, mutate, navigate, navigation.overlay, openBulkOrganizer, openReadTogether, readTogether, readerOrigin, runAgentContextCommand, runBulkCommand, selectPosting, selected, toggleBulkSelection, toggleNavigation, undoTrash, undo, notice?.undo, navigationPostings, postingSource, sectionedImbox, sectionMailboxes]);
+  }, [activeMailbox, agentRailOpen, agentWorkspace, bulkSelectedIds, closeReader, highlightedId, launchHelper, mailbox, moveCursor, moveThreadSelection, mutate, navigate, navigation.overlay, openBulkOrganizer, openReadTogether, readTogether, readerOrigin, runAgentContextCommand, runBulkCommand, selectPosting, selected, toggleBulkSelection, toggleNavigation, undoTrash, undo, notice?.undo, navigationPostings, postingSource, sectionedImbox, sectionMailboxes, openSplitManager, chooseSplit, highlightedPosting, splitIds, splitId]);
 
   const availableCommands = useMemo(() => {
-    const applicable = shortcuts.filter((command) => (command.id !== "undo-trash" || trash.items.length > 0 || Boolean(notice?.undo)) && (command.scope === "global"
+    const applicable = shortcuts.filter((command) => {
+      if (command.id.startsWith("split-")) {
+        if (activeMailbox !== "imbox") return false;
+        if (isSplitNavigationCommand(command.id)) return sectionedImbox && enabledSplits.length > 0 && !selected && !readTogether && !threadListing;
+        if (command.id === "split-create-person" || command.id === "split-create-domain") return Boolean(actionPosting && splitDraftFromPosting(actionPosting, "person", window.heyAgent.profiles.current.active?.email));
+      }
+      return (command.id !== "undo-trash" || trash.items.length > 0 || Boolean(notice?.undo)) && (command.scope === "global"
       || command.scope === "mailbox" && Boolean(activeMailbox)
       || command.scope === "bulk" && bulkSelectedIds.length > 0 && (command.id !== "reply-together" || bulkSelectedIds.length >= 2)
       || command.scope === "conversation" && Boolean(actionPosting) && (bulkSelectedIds.length === 0 || isBulkMutationCommand(command.id))
       || command.scope === "reader" && Boolean(selected || readTogether)
-      || command.scope === "session" && Boolean(agentWorkspace)));
+      || command.scope === "session" && Boolean(agentWorkspace));
+    });
     const validForMailbox = bulkSelectedIds.length > 0 && activeMailbox
       ? applicable.filter((command) => !isBulkMutationCommand(command.id) || (sectionedImbox
         ? sectionedActionRequests(command.id, mailbox?.postings.filter((posting) => bulkSelectedIds.includes(posting.id)) ?? [], sectionMailboxes).length > 0
@@ -1233,12 +1318,15 @@ export default function App() {
       const label = command.id === "aside" ? (toggle?.active ? "Set Aside: remove" : "Set Aside") : toggle?.label;
       return toggle ? { ...command, label: `${label}${bulkSelectedIds.length ? ` · ${bulkSelectedIds.length} selected` : ""}` } : command;
     });
-    return [...helperCommands, ...contextCommands, ...contextualCommands];
-  }, [activeMailbox, actionPosting, agentContextAttachments.length, agentWorkspace, bulkSelectedIds, contextCommands, contextualHelpers, mailbox, readTogether, selected, shortcuts, trash.items.length, notice?.undo, postingSource, sectionedImbox, sectionMailboxes]);
+    const splitCommands: ShortcutDefinition[] = sectionedImbox && enabledSplits.length ? splitIds.map((id) => ({ id: `split-go:${id}`, label: `Go to split: ${id === "all" ? "All" : id === "remaining" ? "Remaining" : enabledSplits.find((split) => split.id === id)!.name}`, keys: [], display: "", scope: "mailbox" })) : [];
+    return [...helperCommands, ...contextCommands, ...contextualCommands, ...splitCommands];
+  }, [activeMailbox, actionPosting, agentContextAttachments.length, agentWorkspace, bulkSelectedIds, contextCommands, contextualHelpers, mailbox, readTogether, selected, shortcuts, trash.items.length, notice?.undo, postingSource, sectionedImbox, sectionMailboxes, enabledSplits, splitIds, threadListing]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isShortcutEvent(event, true)) return;
+      const splitNavigation = canNavigateSplits(event, sectionedImbox && enabledSplits.length > 0 && !selected && !readTogether && !threadListing && !composer && !splitManager && !commandsOpen && !navigation.overlay);
+      const eventCommands = availableCommands.filter((command) => !isSplitNavigationCommand(command.id) || splitNavigation);
       const editableTarget = isEditingEvent(event) || isLocalKeyboardEvent(event);
       if (editableTarget && chord.current) {
         clearTimeout(chord.current.timer); chord.current = undefined; setChordHint(undefined);
@@ -1246,8 +1334,8 @@ export default function App() {
       // Never cancel the browser's editing behavior or dispatch mailbox actions
       // from an editor/dialog, including when focus is on its toolbar.
       if (isDialogKeyboardEvent(event) || editableTarget && isNativeEditingShortcut(event)) return;
-      if (event.repeat && !availableCommands.some((item) => matchesShortcut(event, item))) return;
-      if (bulkComposerOpen || organizer) return;
+      if (event.repeat && !eventCommands.some((item) => matchesShortcut(event, item))) return;
+      if (bulkComposerOpen || organizer || splitManager) return;
       if (event.target instanceof Element && event.target.closest("[data-helper-controls]") && !(event.ctrlKey && event.key.toLowerCase() === "k")) return;
       if (navigation.overlay && event.key === "Escape") {
         event.preventDefault();
@@ -1260,7 +1348,7 @@ export default function App() {
       if (activationTarget && (event.key === "Enter" || event.key === " ")) return;
       if (editableTarget) {
         if (!event.ctrlKey && !event.metaKey) return;
-        const editableCommand = availableCommands.find((item) => matchesShortcut(event, item));
+        const editableCommand = eventCommands.find((item) => matchesShortcut(event, item));
         if (!editableCommand || !["commands", "toggle-navigation", "toggle-agent", "focus-agent", "session-new", "session-close", "session-next", "session-previous"].includes(editableCommand.id)) return;
         if (composer && editableCommand.id !== "commands") return;
         event.preventDefault();
@@ -1287,12 +1375,12 @@ export default function App() {
       if (chord.current) {
         const pending = chord.current;
         clearTimeout(pending.timer); chord.current = undefined; setChordHint(undefined);
-        const completion = availableCommands.find((item) => completesShortcutChord(pending.first, event, item));
+        const completion = eventCommands.find((item) => completesShortcutChord(pending.first, event, item));
         if (completion) { event.preventDefault(); runCommand(completion.id); return; }
       }
-      const command = availableCommands.find((item) => matchesShortcut(event, item));
+      const command = eventCommands.find((item) => matchesShortcut(event, item));
       if (!command) {
-        const starter = availableCommands.find((item) => startsShortcutChord(event, item));
+        const starter = eventCommands.find((item) => startsShortcutChord(event, item));
         if (starter) {
           event.preventDefault();
           const first = starter.keys.find((binding) => binding.includes(" ") && matchesBindingStep(event, binding.split(" ")[0]!))!.split(" ")[0]!;
@@ -1307,7 +1395,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => { window.removeEventListener("keydown", onKeyDown); if (chord.current) clearTimeout(chord.current.timer); };
-  }, [availableCommands, bulkComposerOpen, bulkSelectedIds.length, closeReader, composer, navigation.overlay, notice?.bulkUndoId, organizer, readTogether, runCommand, undo, undoTrash, trash.items.length, selected, mailbox, selectPosting]);
+  }, [availableCommands, bulkComposerOpen, bulkSelectedIds.length, closeReader, composer, navigation.overlay, notice?.bulkUndoId, organizer, readTogether, runCommand, undo, undoTrash, trash.items.length, selected, mailbox, selectPosting, sectionedImbox, enabledSplits.length, splitManager, threadListing, commandsOpen]);
 
   const newChat = () => {
     setAgentError(undefined); setAgentDraftSeed(undefined);
@@ -1469,7 +1557,31 @@ export default function App() {
             {missingAgentObject ? <MissingObjectView object={missingAgentObject} finding={agentWorkspace?.activeSession.status === "starting" || agentWorkspace?.activeSession.status === "running"} onFind={() => void findMissingObject()} onBack={() => setMissingAgentObject(undefined)} />
               : readerOrigin && selected ? <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={readerOrigin === "search" ? "Search results" : readerOrigin === "agent" ? "HEY Agent result" : readerOrigin === "bundle" ? threadListing?.listing?.title ?? "Bundle" : libraryReaderTitle} onOrganize={/^\d+$/.test(selected.id) || /^\d+$/.test(selected.topicId ?? "") ? () => setOrganizer({ postings: [selected] }) : undefined} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => undefined} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={0} onClose={closeReader} onPrevious={() => undefined} onNext={() => undefined} hasPrevious={false} hasNext={false} showTraversal={false} onOpenObject={(object) => void openAgentObject(object)} />
               : activeMailbox ? <>
-              <ImboxView mailboxKey={activeMailbox} showSenderAvatars={settings.showSenderAvatars} sectioned={sectionedImbox} sectionMailboxes={sectionMailboxes} retainedActiveId={selected?.id === retainedActiveId ? retainedActiveId : undefined} profileKey={window.heyAgent.profiles.current.active?.key} onLayoutChange={(layout) => void updateImboxLayout(layout)} onVisiblePostingsChange={updateVisibleSectionPostings} onLoadMore={loadMoreHistory} loadingMore={loadingHistory} loadMoreError={historyError} result={mailbox} overview={activeMailbox === "imbox" ? overview : undefined} loading={loading} searchRequest={0} focusSection={imboxSection} focusSectionRequest={imboxSectionRequest} selectedId={highlightedId} bulkSelectedIds={bulkSelectedIds} bulkBusy={bulkMutating || setAsideGroupBusy} commandPaletteOpen={commandsOpen} onSelect={selectPosting} onHighlight={(id) => setMailboxCursor((current) => current[activeMailbox] === id ? current : { ...current, [activeMailbox]: id })} onToggleSelection={toggleBulkSelection} onBulkAction={runCommand} helperActions={mailHelperActions} onReadTogether={openReadTogether} onReplyTogether={() => setBulkComposerOpen(true)} onOrganizeSelection={openBulkOrganizer} onClearSelection={() => setBulkSelectedIds([])} onRefresh={() => void refreshFromToolbar()} onNavigate={navigate} setAsideGroupTarget={setAsideGroupTarget} onSetAsideGroup={(request) => void updateSetAsideGroup(request)} hidden={Boolean(selected || readTogether || threadListing)} />
+              <ImboxView
+                key={`${activeMailbox}:${sectionedImbox ? splitId : "hey"}`}
+                mailboxKey={activeMailbox} showSenderAvatars={settings.showSenderAvatars}
+                sectioned={sectionedImbox} sectionMailboxes={viewSectionMailboxes}
+                retainedActiveId={selected?.id === retainedActiveId ? retainedActiveId : undefined}
+                profileKey={`${window.heyAgent.profiles.current.active?.key ?? "default"}${sectionedImbox && splitId !== "all" ? `:split:${splitId}` : ""}`}
+                initialHistoryCollapsed={splitId !== "all"}
+                pagingPaused={Boolean(commandsOpen || splitManager || composer || searchOpen || organizer)}
+                onManageSplits={() => openSplitManager()}
+                splitTabs={sectionedImbox && enabledSplits.length > 0 ? <>
+                  <SplitInboxTabs splits={splitState.splits} selectedId={splitId} counts={splitCounts} onSelect={chooseSplit} onManage={() => openSplitManager()} onCreate={() => openSplitManager({})} />
+                  {(splitLoadError || Object.keys(splitState.errors).length > 0) && <div className="sectioned-imbox-pagination-error" role="status"><span>{splitLoadError ?? "Some split labels could not sync."}</span><button type="button" className="toolbar-button" onClick={() => openSplitManager()}>Review</button><button type="button" className="toolbar-button" onClick={() => { void window.heyAgent.mail.refreshSplits().then(setSplitState).catch((reason: unknown) => setSplitLoadError(reason instanceof Error ? reason.message : "Unable to refresh splits.")); }}>Retry</button></div>}
+                </> : undefined}
+                onLayoutChange={(layout) => void updateImboxLayout(layout)} onVisiblePostingsChange={updateVisibleSectionPostings}
+                onLoadMore={loadMoreHistory} loadingMore={loadingHistory} loadMoreError={historyError}
+                result={mailbox} overview={activeMailbox === "imbox" ? overview : undefined} loading={loading}
+                searchRequest={0} focusSection={imboxSection} focusSectionRequest={imboxSectionRequest}
+                selectedId={highlightedId} bulkSelectedIds={bulkSelectedIds} bulkBusy={bulkMutating || setAsideGroupBusy}
+                commandPaletteOpen={commandsOpen} onSelect={selectPosting}
+                onHighlight={(id) => setMailboxCursor((current) => current[activeMailbox] === id ? current : { ...current, [activeMailbox]: id })}
+                onToggleSelection={toggleBulkSelection} onBulkAction={runCommand} helperActions={mailHelperActions}
+                onReadTogether={openReadTogether} onReplyTogether={() => setBulkComposerOpen(true)}
+                onOrganizeSelection={openBulkOrganizer} onClearSelection={() => setBulkSelectedIds([])}
+                onRefresh={() => void refreshFromToolbar()} onNavigate={navigate} setAsideGroupTarget={setAsideGroupTarget}
+                onSetAsideGroup={(request) => void updateSetAsideGroup(request)} hidden={Boolean(selected || readTogether || threadListing)} />
               {threadListing ? <ThreadListingView listing={threadListing.listing} loading={threadListing.loading} error={threadListing.error} onBack={() => { listingRequestSequence.current += 1; setThreadListing(undefined); }} onOpen={(posting) => openDetachedPosting(posting, "bundle")} onRetry={() => void loadThreadListing(threadListing.kind, threadListing.id, true)} onShowAll={threadListing.kind === "bundle" && threadListing.listing?.contact.id ? () => void loadThreadListing("contact", threadListing.listing!.contact.id!) : undefined} />
                 : readTogether && readTogetherItems.length > 0 ? <ReadTogetherView ref={readTogetherRef} items={readTogetherItems} sourceLabel={MAILBOX_LABELS[activeMailbox]} skippedCount={readTogether.skippedCount} onClose={closeReader} onRetryThread={(topicId) => void loadThread(topicId, { force: true, reportError: true }).then((thread) => { if (thread) setReadTogetherThreads((current) => ({ ...current, [topicId]: thread })); })} onOpenObject={(object) => void openAgentObject(object)} />
                 : selected && <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={MAILBOX_LABELS[postingSource(selected)]} supplementalActions={sectionedImbox ? <button type="button" data-tooltip="Done — move to Previously Seen" data-shortcut-id="seen" onClick={() => runCommand("seen")}><Check size={14} /> Done</button> : undefined} mailActions={{ sourceBox: postingSource(selected), onMutate: (request) => void mutate(request), onForward: () => { appSound.play("forward", "interface"); setComposer({ mode: "forward", posting: selected }); }, onMailChanged: replyComplete }} onOrganize={() => setOrganizer({ postings: [selected] })} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => void refresh()} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={replyRequest} replyDraftSeed={replyDraftSeed?.postingId === selected.id ? replyDraftSeed : undefined} onContinueInAgent={(draft) => void continueReplyInAgent(selected, draft)} continueInAgentLabel={settings.helpers.enabled.includes("reply-coach") ? "Reply Coach" : "Continue in agent"} onClose={closeReader} onPrevious={() => moveThreadSelection(-1)} onNext={() => moveThreadSelection(1)} hasPrevious={hasPrevious} hasNext={hasNext} onOpenObject={(object) => void openAgentObject(object)} />}
@@ -1478,7 +1590,7 @@ export default function App() {
               : active === "drafts" ? <DraftsView onNotice={(message) => setNotice({ message })} target={draftAgentTarget} onTargetMissing={markAgentObjectMissing} refreshToken={agentMailRefreshToken} />
               : active === "calendar" ? <CalendarView onReturnMail={() => navigate("imbox")} onNotice={(message) => setNotice({ message })} target={calendarAgentTarget} onTargetMissing={markAgentObjectMissing} onActiveEvent={setCalendarHelperEvent} onHelperWindow={setCalendarHelperWindow} helpers={contextualHelpers.filter((helper) => helper.id !== "meeting-prep" && helper.surfaces.includes("calendar"))} onRunHelper={launchHelper} onMeetingPrep={startMeetingPrep} meetingPrepEnabled={settings.helpers.enabled.includes("meeting-prep")} meetingPrepBusy={startingHelpers.has("meeting-prep")} refreshToken={agentCalendarRefreshToken} />
               : active === "library" ? null
-              : active === "settings" ? <SettingsView settings={settings} theme={theme} onSettings={setSettings} onRunHelper={launchHelper} onEditHelper={() => { if (window.matchMedia("(max-width: 980px)").matches) setAgentRailOpen(false); }} runnableHelpers={contextualHelpers.map((helper) => helper.id)} busyHelpers={startingHelpers} />
+              : active === "settings" ? <SettingsView settings={settings} theme={theme} onSettings={setSettings} onRunHelper={launchHelper} onEditHelper={() => { if (window.matchMedia("(max-width: 980px)").matches) setAgentRailOpen(false); }} onManageSplits={() => openSplitManager()} runnableHelpers={contextualHelpers.map((helper) => helper.id)} busyHelpers={startingHelpers} />
               : active === "sessions" ? <SessionHistory workspace={agentWorkspace} onWorkspace={setAgentWorkspace} onOpen={() => { setAgentDraftSeed(undefined); setAgentRailOpen(true); setAgentFocusRequest((value) => value + 1); }} />
               : <UnsupportedView active={active} onReturn={() => setActive("imbox")} />}
             {!agentRailOpen ? <RailMorphButton rail="agent" open={false} className="agent-rail-reopen" aria-label="Show HEY Agent" data-tooltip="Show HEY Agent" data-shortcut={agentShortcut} data-tooltip-side="left" onClick={() => { appSound.play("snap", "interface"); setAgentRailOpen(true); }} /> : null}
@@ -1494,6 +1606,11 @@ export default function App() {
       {organizer && <MailOrganizer postings={organizer.postings} initialKind={organizer.initialKind} onClose={() => setOrganizer(undefined)} onNotice={(message) => setNotice({ message })} onOpenObject={(object) => void openAgentObject(object)} />}
       {searchOpen && <MailSearch hidden={readerOrigin === "search"} onOpen={(posting) => { appSound.play("open", "interface"); setSelected(posting); setReaderOrigin("search"); }} onClose={() => { appSound.play("close", "interface"); setSearchOpen(false); if (readerOrigin === "search") { setSelected(undefined); setReaderOrigin(undefined); } }} />}
       {commandsOpen && <CommandPalette commands={availableCommands} onRun={runCommand} onClose={() => { appSound.play("close", "interface"); setCommandsOpen(false); }} />}
+      {splitManager && <SplitInboxManager splits={splitState.splits} labels={splitLabels} initialDraft={splitManager.draft}
+        errors={{ ...splitState.errors, ...(splitLoadError ? { _load: splitLoadError } : {}), ...(splitLabelsError ? { _labels: splitLabelsError } : {}) }}
+        onPreview={(draft) => window.heyAgent.mail.previewSplit(draft)} onSave={saveSplit}
+        onRemove={async (id) => { setSplitState(await window.heyAgent.mail.removeSplit(id)); }}
+        onClose={() => setSplitManager(undefined)} />}
       <div className="app-notices">
         <div className="trash-undo-stack" aria-label="Pending trash actions">{[...trash.items].reverse().map((item) => <TrashUndoToast key={item.id} item={item} undo={undoTrash} pause={trash.pause} />)}</div>
         {notice && <div className="mail-notice" role="status"><span>{notice.message}</span>{(notice.undo || notice.bulkUndoId) && <button type="button" onClick={() => void undo()}>Undo{notice.bulkUndoId ? " (Q)" : ""}</button>}<button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setNotice(undefined)}>×</button></div>}

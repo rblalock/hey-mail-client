@@ -24,6 +24,16 @@ Library opens contacts, labels, and Collections into conversation lists, using 5
 
 Composer attachments are staged privately inside the active profile's state directory. New messages, replies, and Reply Together share the same paste/drop handling. Local drafts retain staged files; removing an attachment or successfully sending/saving it removes the staged copy, never the original. CLI 1.7 appends uploads after the body. It cannot add files to forwards or existing saved drafts, or place new uploads between paragraphs. Draft edits omit unchanged bodies to preserve HEY's original HTML; Markdown bodies with attachment markers cannot safely be rewritten here. Edited reply recipients use native `reply --replace-recipients`; never recreate the old create-draft/edit/send workaround or use additive overrides for a complete edited envelope.
 
+## Split inboxes
+
+Optional splits filter the Sectioned Imbox across all five workflow sections. People and exact domains match any participant (OR), excluding the current user from domain matches. Views overlap; Remaining excludes every enabled split. Counts include outstanding workflow items, not Previously Seen. Filtering preserves the history cursor, so scrolling can fetch past pages with no matches. Feed and Paper Trail remain separate.
+
+Split navigation uses quiet underline tabs beneath the existing mail header and shares the app's theme tokens. Settings open in a centered, bounded dialog whose header and footer stay visible while its body scrolls. Saving an enabled split requires a preview of the current rules. `Tab` / `Shift+Tab` switch splits only while the split mail list or its tabs have focus; native form navigation is unaffected.
+
+Definitions live in `config/profiles/<key>/mail-splits.json`. The profile-local runtime observes Imbox, Reply Later, and Set Aside while running, and adds matched postings to a linked HEY label in bounded batches. Labels preserve membership after Done, rule edits, disabling, or deleting a split; there is no label-removal automation. Label members are read with pagination. Previews are read-only and report their loaded-mail scope. A separate pending-label journal prevents blindly repeating an uncertain label creation; it is not portable configuration.
+
+Background work captures the account context and participates in the existing pending-write/account-switch guard. Switching stops the previous runtime. Definitions can be copied while the app is closed; caches, sync state, secrets, and live network-file synchronization are not part of that contract.
+
 ## Local mail cache
 
 Settings → Mail opts into body caching; existing installations remain off. Users choose a combined 50/100/250 MB budget, 1/7/30-day fetch-age retention, and whether to preload nearby mail. Main stores validated thread bodies and attachment metadata under the app state directory's `mail-cache`, keyed by server/account/topic. Files are private (`0600`, directory `0700`), not encrypted by the app. No attachment downloads, third-party sync, or mailbox crawler are involved.

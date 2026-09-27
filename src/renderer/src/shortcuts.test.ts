@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { completesShortcutChord, DEFAULT_SETTINGS, matchesShortcut, resolveShortcuts, SHORTCUTS, startsShortcutChord } from "./shortcuts";
+import { completesShortcutChord, DEFAULT_SETTINGS, matchesShortcut, resolveShortcuts, SHORTCUTS, startsShortcutChord, validateCustomShortcuts, type ShortcutDefinition } from "./shortcuts";
 
 function keyboard(key: string, overrides: Partial<KeyboardEvent> = {}): KeyboardEvent {
   return { key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...overrides } as KeyboardEvent;
@@ -61,5 +61,40 @@ describe("mail shortcut registry", () => {
     const imbox = superhuman.find((item) => item.id === "nav-imbox")!;
     expect(startsShortcutChord(keyboard("g"), imbox)).toBe(true);
     expect(completesShortcutChord("g", keyboard("i"), imbox)).toBe(true);
+  });
+
+  it.each(["hey", "superhuman"] as const)("registers split cycling separately from session cycling for %s", (shortcutProfile) => {
+    const shortcuts = resolveShortcuts({ ...DEFAULT_SETTINGS, shortcutProfile });
+    const next = shortcuts.find((item) => item.id === "split-next")!;
+    const previous = shortcuts.find((item) => item.id === "split-previous")!;
+    expect(next).toMatchObject({ display: "Tab", scope: "mailbox" });
+    expect(previous).toMatchObject({ display: "Shift+Tab", scope: "mailbox" });
+    expect(matchesShortcut(keyboard("Tab"), next)).toBe(true);
+    expect(matchesShortcut(keyboard("Tab", { shiftKey: true }), previous)).toBe(true);
+    expect(matchesShortcut(keyboard("Tab", { shiftKey: true }), next)).toBe(false);
+    expect(matchesShortcut(keyboard("Tab", { ctrlKey: true }), next)).toBe(false);
+    expect(matchesShortcut(keyboard("Tab", { ctrlKey: true, shiftKey: true }), previous)).toBe(false);
+    expect(matchesShortcut(keyboard("Tab", { repeat: true }), next)).toBe(false);
+  });
+
+  it("makes split setup discoverable without assigning ordinary typing shortcuts", () => {
+    for (const id of ["split-create", "split-manage", "split-create-person", "split-create-domain"]) {
+      expect(SHORTCUTS.find((item) => item.id === id)).toMatchObject({ keys: [], display: "" });
+    }
+    expect(SHORTCUTS.find((item) => item.id === "split-create-person")?.scope).toBe("conversation");
+    expect(SHORTCUTS.find((item) => item.id === "split-create-domain")?.scope).toBe("conversation");
+    const dynamic: ShortcutDefinition = { id: "split-go:work", label: "Go to Work split", keys: [], display: "", scope: "mailbox" };
+    expect(matchesShortcut(keyboard("Tab"), dynamic)).toBe(false);
+  });
+
+  it("respects custom split aliases, disabling Tab, and conflict validation", () => {
+    const customShortcuts = validateCustomShortcuts({ "split-next": ["Alt+ArrowRight"], "split-previous": [], "split-create": ["g x"] });
+    const shortcuts = resolveShortcuts({ ...DEFAULT_SETTINGS, shortcutProfile: "custom", customShortcuts });
+    const next = shortcuts.find((item) => item.id === "split-next")!;
+    expect(matchesShortcut(keyboard("Tab"), next)).toBe(false);
+    expect(matchesShortcut(keyboard("ArrowRight", { altKey: true }), next)).toBe(true);
+    expect(shortcuts.find((item) => item.id === "split-previous")?.keys).toEqual([]);
+    expect(() => validateCustomShortcuts({ "split-next": ["j"] })).toThrow(/conflicts/);
+    expect(() => validateCustomShortcuts({ "split-next": ["ctrl+tab"] })).toThrow(/conflicts/);
   });
 });

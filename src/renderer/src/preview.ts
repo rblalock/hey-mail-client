@@ -3,6 +3,7 @@ import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, helperById, isCustomHe
 import { addDays, eventOccursOn } from "./calendar";
 import { DeferredTrash } from "../../shared/deferred-trash";
 import { validateCustomShortcuts } from "../../shared/shortcuts";
+import { MAX_MAIL_SPLITS, matchesMailSplit, normalizeMailSplitDraft, splitTopicId, type MailSplit, type MailSplitState } from "../../shared/mail-splits";
 
 const now = Date.now();
 const minutesAgo = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
@@ -15,7 +16,8 @@ const previewAgentComplete = previewParams.has("agent-complete");
 const previewAgentMissing = previewParams.has("agent-missing");
 const previewBundle = previewParams.has("bundle");
 const previewSetAsideGroups = previewParams.has("set-aside-groups");
-const previewSectionedImbox = previewParams.has("sectioned-imbox");
+const previewSplitInbox = previewParams.has("split-inbox");
+const previewSectionedImbox = previewParams.has("sectioned-imbox") || previewSplitInbox;
 const previewRecurrence = previewParams.has("recurrence");
 const previewCalendarCollisions = previewParams.has("calendar-collisions");
 const previewThemeName = previewParams.get("theme");
@@ -132,7 +134,7 @@ const previewEvents: CalendarEvent[] = [
 ];
 
 // Fictional, independent mailbox state for the sectioned Imbox browser proof.
-function sectionedImboxFixture() {
+function sectionedImboxFixture(splitInbox = false, ownEmail = "alex@example.com") {
   const posting = (id: number, subject: string, seen = false): ImboxPosting => ({
     id: String(id), topicId: String(id + 10_000), kind: "thread", subject, seen,
     summary: "Fictional preview conversation for checking the Imbox workflow.",
@@ -144,12 +146,33 @@ function sectionedImboxFixture() {
       posting(2101, "Active one — launch notes"), posting(2102, "Active two — studio decisions"),
       posting(2103, "Active three — travel plans"), posting(2104, "Active four — Friday review"),
       { ...posting(2401, "Returned reminder — review the proposal", true), bubbledUp: true },
-      ...Array.from({ length: 75 }, (_, index) => posting(3000 + index, `Previously Seen ${String(index + 1).padStart(2, "0")} — project archive`, true)),
+      ...Array.from({ length: splitInbox ? 125 : 75 }, (_, index) => posting(3000 + index, `Previously Seen ${String(index + 1).padStart(2, "0")} — project archive`, true)),
     ],
     laterbox: [posting(2201, "Reply Later one — answer the invitation"), posting(2202, "Reply Later two — send the estimate", true)],
     asidebox: [posting(2301, "Set Aside one — keep the itinerary"), posting(2302, "Set Aside two — reference notes", true)],
     bubblebox: [posting(2501, "Scheduled reminder — next week", true)], feedbox: [], trailbox: [],
   };
+  if (splitInbox) {
+    const maya = { name: "Maya Chen", email: "maya@studio.example", initials: "MC" };
+    const drew = { name: "Drew Ellis", email: "drew@studio.example", initials: "DE" };
+    const sam = { name: "Sam Rivera", email: "sam@example.com", initials: "SR" };
+    const github = { name: "GitHub", email: "notifications@github.example", initials: "GH" };
+    const outside = { name: "Northline Studio", email: "hello@northline.example", initials: "NS" };
+    for (const items of Object.values(boxes)) for (const item of items) {
+      const row = Number(item.id);
+      const historyIndex = row - 3000;
+      const sender = row === 2101 || row === 2201 || row === 2401 || row === 2501 ? maya
+        : row === 2102 || row === 2301 ? drew
+          : row === 2302 ? sam
+            : row === 2104 ? github
+              : historyIndex >= 50 && historyIndex < 100 ? historyIndex % 2 === 0 ? maya : drew
+                : historyIndex >= 100 && historyIndex < 115 ? github
+                  : historyIndex >= 115 ? maya : outside;
+      item.sender = sender;
+      item.contacts = [sender];
+      item.addressedContacts = [{ name: "Alex Morgan", email: ownEmail, kind: "User" }];
+    }
+  }
   const requests: Array<{ box: MailboxKey; options?: MailboxListOptions }> = [];
   const mutations: MailMutationRequest[] = [];
   const find = (id: string) => Object.entries(boxes).flatMap(([box, items]) => items.map((item) => ({ box: box as MailboxKey, item }))).find(({ item }) => item.id === id);
@@ -199,11 +222,10 @@ function sectionedImboxFixture() {
     return { message: request.operation === "done" ? "Conversation marked done." : "Conversation updated.", undo };
   };
   Object.assign(window, { __sectionedImboxPreview: { requests, mutations, snapshot: () => structuredClone(boxes) } });
-  return { list, mutate, findTopic: (topicId: string) => Object.values(boxes).flat().find((item) => item.topicId === topicId), overview: () => ({ count: boxes.laterbox.length, latest: boxes.laterbox[0] }) };
+  return { list, mutate, snapshot: () => structuredClone(boxes), findTopic: (topicId: string) => Object.values(boxes).flat().find((item) => item.topicId === topicId), overview: () => ({ count: boxes.laterbox.length, latest: boxes.laterbox[0] }) };
 }
 
 export function previewApi(): HeyAgentApi {
-  const sectionedFixture = previewSectionedImbox ? sectionedImboxFixture() : undefined;
   const trash = new DeferredTrash();
   const accounts = [
     { key: "a".repeat(32), accountId: "101", name: "Alex Morgan", email: "alex@example.com", server: "https://app.hey.com" },
@@ -215,6 +237,7 @@ export function previewApi(): HeyAgentApi {
     accounts.splice(1);
   }
   const account = accounts.find((item) => item.key === localStorage.getItem("preview-profile")) ?? accounts[0]!;
+  const sectionedFixture = previewSectionedImbox ? sectionedImboxFixture(previewSplitInbox, account.email) : undefined;
   let settings: AppSettings = { version: 1, showSenderAvatars: false, imboxLayout: previewSectionedImbox ? "sectioned" : "hey", mailCache: { ...DEFAULT_MAIL_CACHE_SETTINGS }, interfaceFont: "instrument", shortcutProfile: "hey", customShortcuts: {}, sound: { ...DEFAULT_SOUND_SETTINGS }, ai: { general: { thinking: "inherit" }, quickUsesGeneral: true, quick: { thinking: "inherit" } }, helpers: { catalogVersion: HELPER_CATALOG_VERSION, enabled: [...DEFAULT_ENABLED_HELPERS] } };
   let mailDrafts: MailDraft[] = [{ id: "draft-1", subject: "Launch follow-up", to: "maya@example.com", cc: "", bcc: "", body: "Hi Maya,\n\nThe revised sequence looks good. I have one final question about Friday.", updatedAt: "2026-09-03T18:10:00-04:00" }];
   let calendarEvents = structuredClone(previewEvents);
@@ -270,6 +293,67 @@ export function previewApi(): HeyAgentApi {
     const memberCount = targetIds.filter((id) => item.members.has(id)).length;
     return { id: item.id, name: item.name, summary: item.summary, memberCount, membership: memberCount === 0 ? "none" as const : memberCount === targetIds.length ? "all" as const : "some" as const };
   });
+  const splitStorageKey = `preview-mail-splits:${previewSplitInbox ? "split-inbox" : "default"}:${account.key}`;
+  let splits: MailSplit[] = previewSplitInbox && account.accountId === "101" ? [
+    { id: "vip", name: "VIP", enabled: true, people: ["maya@studio.example", "sam@example.com"], domains: [], labelId: "703", labelName: "VIP" },
+    { id: "team", name: "Team", enabled: true, people: [], domains: ["studio.example"], labelId: "704", labelName: "Team" },
+    { id: "github", name: "GitHub", enabled: true, people: ["notifications@github.example"], domains: [], labelId: "705", labelName: "GitHub" },
+  ] : [];
+  for (const split of splits) previewOrganization.labels.push({ id: split.labelId!, name: split.labelName, summary: "Split inbox label", members: new Set(split.id === "vip" ? ["3000"] : []) });
+  try {
+    const stored = JSON.parse(localStorage.getItem(splitStorageKey) ?? "null") as { splits: MailSplit[]; labels?: Array<{ id: string; name: string; summary: string; members: string[] }> } | null;
+    if (stored && Array.isArray(stored.splits)) {
+      splits = stored.splits.map((split) => ({ ...normalizeMailSplitDraft(split), id: split.id }));
+      if (Array.isArray(stored.labels)) previewOrganization.labels = stored.labels.map((label) => ({ ...label, members: new Set(label.members) }));
+    }
+  } catch { /* A damaged fictional fixture should not block previewing the app. */ }
+  const splitListeners = new Set<(state: MailSplitState) => void>();
+  const splitRequests: Array<{ operation: string; splitId?: string }> = [];
+  const splitMail = () => {
+    const boxes = sectionedFixture?.snapshot();
+    return boxes ? [...boxes.imbox, ...boxes.laterbox, ...boxes.asidebox] : imboxPostings;
+  };
+  const splitState = (): MailSplitState => {
+    const mail = splitMail();
+    return structuredClone({
+      splits, ownEmail: account.email, errors: {},
+      memberships: Object.fromEntries(splits.map((split) => {
+        const members = previewOrganization.labels.find((label) => label.id === split.labelId)?.members;
+        return [split.id, mail.filter((posting) => members?.has(posting.id)).map(splitTopicId)];
+      })),
+    });
+  };
+  const persistSplits = () => localStorage.setItem(splitStorageKey, JSON.stringify({ splits, labels: previewOrganization.labels.map((label) => ({ ...label, members: [...label.members] })) }));
+  const emitSplits = () => { const state = splitState(); for (const listener of splitListeners) listener(state); return state; };
+  const applySplitRules = () => {
+    for (const split of splits.filter((item) => item.enabled)) {
+      const matches = splitMail().filter((posting) => matchesMailSplit(posting, split, account.email));
+      let label = previewOrganization.labels.find((item) => split.labelId ? item.id === split.labelId : item.name.toLowerCase() === split.labelName.toLowerCase());
+      if (!label && !split.labelId && matches.length) {
+        label = { id: String(Math.max(700, ...previewOrganization.labels.map((item) => Number(item.id))) + 1), name: split.labelName, summary: "Created in preview", members: new Set<string>() };
+        previewOrganization.labels.push(label);
+      }
+      if (label) { split.labelId = label.id; split.labelName = label.name; for (const posting of matches) label.members.add(posting.id); }
+    }
+    persistSplits();
+    return emitSplits();
+  };
+  if (previewSplitInbox) {
+    applySplitRules();
+    Object.assign(window, { __splitInboxPreview: { storageKey: splitStorageKey, requests: splitRequests, snapshot: splitState, mailboxSnapshot: () => sectionedFixture?.snapshot(), labelSnapshot: () => previewOrganization.labels.map((label) => ({ id: label.id, name: label.name, postingIds: [...label.members] })) } });
+  }
+  const splitLabelPage = (id: string, page?: string) => {
+    const label = previewOrganization.labels.find((item) => item.id === id);
+    const members = splitMail().filter((posting) => label?.members.has(posting.id));
+    const prefix = `preview-label:${id}:`;
+    const offset = page ? Number(page.startsWith(prefix) ? page.slice(prefix.length) : "invalid") : 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid fictional label cursor.");
+    return {
+      id, title: label?.name ?? "Label", totalCount: members.length,
+      postings: structuredClone(members.slice(offset, offset + 25)),
+      ...(offset + 25 < members.length ? { nextPage: `${prefix}${offset + 25}` } : {}),
+    };
+  };
   const agentAttachments = previewAgentContext
     ? [{ kind: "hey-thread" as const, id: "1001", title: "Updated launch timeline and final decisions", subtitle: "Maya Chen", sourceBox: "imbox" as const }]
     : [];
@@ -352,6 +436,28 @@ export function previewApi(): HeyAgentApi {
       openExternalUrl: async () => undefined,
     },
     mail: {
+      getSplits: async () => splitState(),
+      saveSplit: async (value) => {
+        const draft = normalizeMailSplitDraft(value);
+        if (draft.id && !splits.some((split) => split.id === draft.id)) throw new Error("This split no longer exists.");
+        if (!draft.id && splits.length >= MAX_MAIL_SPLITS) throw new Error(`Use at most ${MAX_MAIL_SPLITS} splits per account.`);
+        if (splits.some((split) => split.id !== draft.id && split.name.toLowerCase() === draft.name.toLowerCase())) throw new Error("A split with that name already exists.");
+        if (draft.labelId && draft.enabled && !previewOrganization.labels.some((label) => label.id === draft.labelId)) throw new Error("That HEY label is unavailable in this account. Choose another label.");
+        const split = { ...draft, id: draft.id ?? crypto.randomUUID() };
+        splitRequests.push({ operation: "save", splitId: split.id });
+        splits = draft.id ? splits.map((item) => item.id === draft.id ? split : item) : [...splits, split];
+        return applySplitRules();
+      },
+      removeSplit: async (id) => { splitRequests.push({ operation: "remove", splitId: id }); splits = splits.filter((split) => split.id !== id); persistSplits(); return emitSplits(); },
+      previewSplit: async (value) => {
+        const draft = normalizeMailSplitDraft(value);
+        const mail = splitMail();
+        const matches = mail.filter((posting) => matchesMailSplit(posting, draft, account.email));
+        splitRequests.push({ operation: "preview", splitId: draft.id });
+        return { count: matches.length, scannedCount: mail.length, samples: structuredClone(matches.slice(0, 8)), scope: `Rule matches among ${mail.length} fictional Imbox, Reply Later, and Set Aside conversations. Existing label-only matches are not included.` };
+      },
+      refreshSplits: async () => { splitRequests.push({ operation: "refresh" }); return applySplitRules(); },
+      subscribeSplits: (listener) => { splitListeners.add(listener); return () => splitListeners.delete(listener); },
       listImbox: async () => sectionedFixture?.list("imbox") ?? ({ status: "ready", boxKey: "imbox", boxName: "Imbox", postings: imboxPostings }),
       listMailbox: async (box, options) => sectionedFixture?.list(box, options) ?? ({ status: "ready", boxKey: box, boxName: box === "imbox" ? "Imbox" : box === "asidebox" ? "Set Aside" : "Mailbox", postings: box === "asidebox" && previewSetAsideGroups ? setAsidePostings : imboxPostings }),
       search: async (request) => ({ query: request.query ?? "", page: request.page ?? 1, hasMore: false, postings: postings.filter((posting) => `${posting.subject} ${posting.summary}`.toLowerCase().includes((request.query ?? "").toLowerCase())) }),
@@ -370,14 +476,15 @@ export function previewApi(): HeyAgentApi {
           const item = items.find((candidate) => candidate.id === request.targetId);
           if (item) for (const member of members) request.action === "add" ? item.members.add(member) : item.members.delete(member);
         }
+        persistSplits(); emitSplits();
         return { message: `${members.length} ${members.length === 1 ? "conversation" : "conversations"} updated.` };
       },
       listScreener: async () => ({ status: "ready", entries: screenerEntries }),
       getOverview: async () => ({ screener: { status: "ready", entries: screenerEntries }, replyLater: sectionedFixture?.overview() ?? { count: 3, latest: postings[0] } }),
       decideScreener: async () => ({ message: "Screener updated." }),
-      listLibrary: async (kind) => ({ kind, items: kind === "contacts" ? postings.map((posting, index) => ({ id: String(index), title: posting.sender.name, subtitle: posting.sender.email, contact: posting.sender })) : [] }),
-      readLibrarySource: async (kind, id) => ({ kind, id, title: kind === "labels" ? "Launch" : "Fall launch", totalCount: 3, postings: postings.slice(0, 3) }),
-      listLibraryThreads: async (kind, id) => ({ kind, id, title: kind === "labels" ? "Launch" : kind === "collections" ? "Fall launch" : "Conversations", totalCount: 3, postings: postings.slice(0, 3) }),
+      listLibrary: async (kind) => ({ kind, items: kind === "contacts" ? postings.map((posting, index) => ({ id: String(index), title: posting.sender.name, subtitle: posting.sender.email, contact: posting.sender })) : previewOrganization[kind].map((item) => ({ id: item.id, title: item.name, subtitle: item.summary })) }),
+      readLibrarySource: async (kind, id) => previewSplitInbox && kind === "labels" ? { kind, ...splitLabelPage(id) } : ({ kind, id, title: kind === "labels" ? "Launch" : "Fall launch", totalCount: 3, postings: postings.slice(0, 3) }),
+      listLibraryThreads: async (kind, id, page) => previewSplitInbox && kind === "labels" ? { kind, ...splitLabelPage(id, page) } : ({ kind, id, title: kind === "labels" ? "Launch" : kind === "collections" ? "Fall launch" : "Conversations", totalCount: 3, postings: postings.slice(0, 3) }),
       showContact: async (id) => {
         const source = postings.flatMap((posting) => posting.contacts).find((contact) => contact.id === id) ?? postings[Number(id)]?.contacts[0];
         return { ...source, id, name: source?.name ?? "Contact", email: source?.email ?? "contact@example.com", aliases: [], note: "", status: "approved" };

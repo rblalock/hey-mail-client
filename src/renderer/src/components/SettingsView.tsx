@@ -15,6 +15,7 @@ type SettingsViewProps = {
   onSettings: (settings: AppSettings) => void;
   onRunHelper: (id: HelperId) => void;
   onEditHelper: () => void;
+  onManageSplits?: () => void;
   runnableHelpers: HelperId[];
   busyHelpers: Set<HelperId>;
 };
@@ -169,7 +170,7 @@ function MailCacheControls({ settings, visible, onSettings, location }: Pick<Set
   </div>;
 }
 
-export default function SettingsView({ settings, theme, onSettings, onRunHelper, onEditHelper, runnableHelpers, busyHelpers }: SettingsViewProps) {
+export default function SettingsView({ settings, theme, onSettings, onRunHelper, onEditHelper, onManageSplits, runnableHelpers, busyHelpers }: SettingsViewProps) {
   const mailCache = settings.mailCache ?? DEFAULT_MAIL_CACHE_SETTINGS;
   const imboxLayout = settings.imboxLayout ?? "hey";
   const [openSection, setOpenSection] = useState<SectionId | null>(null);
@@ -277,6 +278,7 @@ export default function SettingsView({ settings, theme, onSettings, onRunHelper,
         <div className="mail-cache-settings mail-cache-prefetch">
           <label className="sound-pack" htmlFor="imbox-layout"><span><strong>Imbox layout</strong></span><select id="imbox-layout" value={imboxLayout} disabled={savingImboxLayout} aria-describedby="imbox-layout-description" onChange={(event) => void chooseImboxLayout(event.currentTarget.value as AppSettings["imboxLayout"])}><option value="hey">HEY</option><option value="sectioned">Sectioned</option></select></label>
           <p id="imbox-layout-description" className="settings-section-description">HEY keeps the familiar Imbox layout. Sectioned groups Active, Reply Later, Set Aside, and Bubbled Up, with a quieter Previously Seen section.</p>
+          {onManageSplits && <><p className="settings-section-description">Split the Sectioned Imbox by people or domains. Each split keeps its own workflow sections and a HEY label.</p><button type="button" className="toolbar-button" onClick={onManageSplits}>Manage splits</button></>}
           {imboxLayoutError && <p className="settings-inline-error" role="alert">{imboxLayoutError}</p>}
         </div>
         <MailCacheControls settings={settings} visible={openSection === "mail"} onSettings={onSettings} location={status?.paths.mailCache} />

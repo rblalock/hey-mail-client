@@ -40,6 +40,7 @@ import { HeyAccountScope } from "../../resources/hey-account-scope.mjs";
 import { listLibraryThreads } from "./hey";
 import { DeferredTrash } from "../shared/deferred-trash";
 import { acknowledgeHeyWrites, pendingHeyWrites } from "../../resources/hey-write-receipts.mjs";
+import { SplitRuntime } from "./split-runtime";
 
 process.env.PATH = desktopRuntimePath();
 const paths = resolveAppPaths();
@@ -94,15 +95,25 @@ function trashId(value: unknown): string {
 }
 const themeWatcher = new ThemeWatcher((theme) => mainWindow?.webContents.send("theme:changed", theme));
 let heyWatcher: HeyWatcher | undefined;
+let splitRuntime: SplitRuntime | undefined;
 
 function bindProfile(): void {
-  agent?.stop(); heyWatcher?.stop();
+  agent?.stop(); heyWatcher?.stop(); splitRuntime?.stop();
   const profile = profiles.state.active;
   if (!profile) { accountContext = undefined; return; }
   const token = profiles.state.token;
   const directories = profiles.directories(profile.key);
   const env = { ...process.env, HEY_ACCOUNT_ID: profile.accountId, HEY_BASE_URL: profile.server, HEY_NONINTERACTIVE: "1", HEY_AGENT_ACCOUNT_ID: profile.accountId, HEY_AGENT_ACCOUNT_SERVER: profile.server, HEY_AGENT_WRITE_RECEIPTS: join(directories.state, "pending-writes") };
   accountContext = { scope: new HeyAccountScope(profile.accountId, profile.server), env };
+  splitRuntime = new SplitRuntime(join(paths.config, "profiles", profile.key, "mail-splits.json"), accountContext,
+    (state) => { if (profiles.state.token === token) mainWindow?.webContents.send("mail:splits-changed", state); },
+    async (task) => {
+      if (profiles.state.token !== token || switchingProfile) throw new Error("The account changed. Reopen the split to continue.");
+      if (pendingHeyWrites(env.HEY_AGENT_WRITE_RECEIPTS).length) throw new Error("A HEY change needs checking before split labels can continue. Verify it in HEY, then acknowledge it in the account menu.");
+      pendingWrites++;
+      try { return await task(); } finally { pendingWrites--; }
+    }, profile.email);
+  void splitRuntime.refresh();
   agent = new AgentSessionManager(directories.workspace, new ChatStore(join(directories.state, "chats.json")), env, piExtensionPath, helperRoot);
   const profileAgent = agent;
   handoffs = new AgentHandoffs(profile, (tabId) => profileAgent.handoffSnapshot(tabId), env);
@@ -114,6 +125,7 @@ function bindProfile(): void {
     if (change.topicId) void mailDiskCache.remove(profile, change.topicId).catch(() => undefined);
     else if (change.change === "resync" || change.change === "deleted") void mailDiskCache.clearProfile(profile).catch(() => undefined);
     mainWindow?.webContents.send("mail:changed", change);
+    if (!change.box || ["imbox", "laterbox", "asidebox"].includes(change.box.key)) splitRuntime?.schedule();
   }, env);
   void heyWatcher.start();
 }
@@ -187,9 +199,27 @@ function registerIpc(): void {
     await shell.openExternal(url);
   });
   handle("mail:list-imbox", () => listImbox());
-  handle("mail:list-mailbox", (_event, box, options) => {
+  handle("mail:get-splits", () => splitRuntime!.get());
+  handle("mail:save-split", async (_event, draft) => {
+    const runtime = splitRuntime!;
+    await runtime.store.save(draft);
+    runtime.schedule();
+    return runtime.get();
+  });
+  handle("mail:remove-split", async (_event, id) => {
+    if (typeof id !== "string") throw new Error("Choose a split to remove.");
+    await splitRuntime!.store.remove(id); return splitRuntime!.get();
+  });
+  handle("mail:preview-split", async (_event, draft) => splitRuntime!.preview(draft));
+  handle("mail:refresh-splits", async () => {
+    await splitRuntime!.store.refreshMemberships(); await splitRuntime!.refresh(true); return splitRuntime!.get();
+  });
+  handle("mail:list-mailbox", async (_event, box, options) => {
     if (typeof box !== "string") throw new Error("A HEY mailbox is required.");
-    return listMailbox(box as MailboxKey, process.env, mailboxListOptions(options));
+    const runtime = splitRuntime;
+    const result = await listMailbox(box as MailboxKey, process.env, mailboxListOptions(options));
+    runtime?.observe(box as MailboxKey, result);
+    return result;
   });
   handle("mail:search", (_event, request) => {
     if (!isMailSearchRequest(request)) throw new Error("A valid HEY search is required.");
@@ -266,7 +296,10 @@ function registerIpc(): void {
   });
   handle("mail:mutate", async (_event, request) => {
     if (!isMailMutation(request)) throw new Error("Invalid HEY mail action.");
+    const runtime = splitRuntime;
+    runtime?.store.forget(request.postingIds);
     const result = await mutateMail(request);
+    runtime?.schedule();
     if (request.operation === "trash" || request.operation === "spam") await mailDiskCache.clearProfile(profiles.state.active!).catch(() => undefined);
     return result;
   });
@@ -274,8 +307,11 @@ function registerIpc(): void {
     if (!isMailMutation(request) || request.operation !== "trash") throw new Error("Invalid trash action.");
     const context = profileRequest.getStore()!;
     const profile = profiles.state.active!;
+    const runtime = splitRuntime;
     return deferredTrash.enqueue(trashId(id), profiles.state.token, async () => {
+      runtime?.store.forget(request.postingIds);
       const result = await profileRequest.run(context, () => mutateMail(request));
+      runtime?.schedule();
       await mailDiskCache.clearProfile(profile).catch(() => undefined);
       return result;
     });
@@ -775,5 +811,6 @@ app.on("before-quit", (event) => {
   cleanupMailAttachmentDownloads();
   themeWatcher.stop();
   heyWatcher?.stop();
+  splitRuntime?.stop();
   agent?.stop();
 });

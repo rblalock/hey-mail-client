@@ -1,3 +1,5 @@
+import type { MailSplitDraft, MailSplitPreview, MailSplitState } from "./mail-splits";
+
 export type RuntimeId = "hey" | "pi" | "hey-auth" | "hey-skill" | "hey-agent-extension";
 
 export type RuntimeProbe = {
@@ -923,6 +925,12 @@ export type HeyAgentApi = {
     openExternalUrl(url: string): Promise<void>;
   };
   mail: {
+    getSplits(): Promise<MailSplitState>;
+    saveSplit(draft: MailSplitDraft): Promise<MailSplitState>;
+    removeSplit(id: string): Promise<MailSplitState>;
+    previewSplit(draft: MailSplitDraft): Promise<MailSplitPreview>;
+    refreshSplits(): Promise<MailSplitState>;
+    subscribeSplits(listener: (state: MailSplitState) => void): () => void;
     listImbox(): Promise<ImboxResult>;
     listMailbox(box: MailboxKey, options?: MailboxListOptions): Promise<ImboxResult>;
     search(request: MailSearchRequest): Promise<MailSearchResult>;

@@ -12,6 +12,16 @@ const api: HeyAgentApi = {
     openExternalUrl: (url) => invoke("system:open-external-url", url),
   },
   mail: {
+    getSplits: () => invoke("mail:get-splits"),
+    saveSplit: (draft) => invoke("mail:save-split", draft),
+    removeSplit: (id) => invoke("mail:remove-split", id),
+    previewSplit: (draft) => invoke("mail:preview-split", draft),
+    refreshSplits: () => invoke("mail:refresh-splits"),
+    subscribeSplits: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state);
+      ipcRenderer.on("mail:splits-changed", handler);
+      return () => ipcRenderer.removeListener("mail:splits-changed", handler);
+    },
     listImbox: () => invoke("mail:list-imbox"),
     listMailbox: (box, options) => invoke("mail:list-mailbox", box, options),
     search: (request) => invoke("mail:search", request),

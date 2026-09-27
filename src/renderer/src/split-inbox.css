@@ -1,0 +1,92 @@
+.split-inbox-bar { display: flex; flex: none; min-width: 0; align-items: stretch; gap: 10px; border-bottom: 1px solid var(--line); padding: 0 12px; }
+.split-inbox-tabs { display: flex; min-width: 0; flex: 1; gap: 14px; overflow-x: auto; scrollbar-width: thin; }
+.split-inbox-tabs > button { display: inline-flex; min-width: 0; max-width: 190px; flex: none; align-items: center; gap: 6px; padding: 12px 2px; border-bottom: 2px solid transparent; color: var(--ink-2); font-size: var(--type-body); white-space: nowrap; }
+.split-inbox-tabs > button:hover { color: var(--ink); }
+.split-inbox-tabs > button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--ink); font-weight: 650; }
+.split-inbox-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.split-inbox-count { color: var(--ink-2); font-size: var(--type-meta); font-variant-numeric: tabular-nums; }
+.split-inbox-tools { display: flex; flex: none; align-items: center; gap: 3px; }
+.split-inbox-tools .icon-button { width: 30px; height: 32px; }
+
+.split-manager { width: min(680px, calc(100vw - 40px)); max-width: none; max-height: min(800px, calc(100dvh - 48px)); margin: auto; overflow: hidden; padding: 0; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); color: var(--ink); font-family: var(--app-font); font-size: var(--type-body); }
+.split-manager[open] { display: flex; flex-direction: column; }
+.split-manager::backdrop { background: oklch(0 0 0 / 0.48); }
+.split-manager-heading { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
+.split-manager-heading > div { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.split-manager-heading h2 { margin: 0; color: var(--ink); font-size: 18px; font-weight: 650; }
+.split-manager .icon-button { width: 34px; height: 34px; flex: none; }
+.split-editor { display: flex; min-height: 0; flex: 1; flex-direction: column; }
+.split-manager-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px 22px; }
+.split-manager h3 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 650; }
+.split-manager p { margin: 0; color: var(--ink-2); line-height: 1.55; }
+.split-editor-fields { display: flex; min-width: 0; flex-direction: column; gap: 22px; margin: 0; padding: 0; border: 0; }
+.split-field { display: flex; min-width: 0; flex-direction: column; align-items: stretch; gap: 7px; }
+.split-field > span:first-child { color: var(--ink); font-weight: 550; }
+.split-manager .split-field-help { color: var(--ink-2); font-size: 12px; line-height: 1.45; }
+.split-field input, .split-field textarea, .split-field select { width: 100%; min-width: 0; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--field); color: var(--ink); font: inherit; line-height: 1.45; caret-color: var(--accent); }
+.split-field textarea { min-height: 84px; resize: vertical; }
+.split-field input::placeholder, .split-field textarea::placeholder { color: var(--ink-2); }
+.split-field :is(input, textarea, select):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.split-field [aria-invalid="true"] { border-color: var(--red); }
+.split-rule-fields > p, .split-label-fields > p { margin-top: 5px; }
+.split-rule-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+.split-label-fields { padding-top: 20px; border-top: 1px solid var(--line); }
+.split-label-fields h3 { display: flex; align-items: center; gap: 7px; }
+.split-label-fields > .split-field { margin-top: 12px; }
+.split-enabled { display: flex; align-items: center; gap: 9px; color: var(--ink); cursor: pointer; }
+.split-enabled input { width: 16px; height: 16px; flex: none; accent-color: var(--accent); }
+.split-manager .split-sync-note { max-width: 68ch; color: var(--ink-2); font-size: 12px; line-height: 1.55; }
+.split-editor-fields > .split-sync-note { margin-top: -14px; }
+.split-manager .split-field-error, .split-manager .split-feedback { color: var(--red); font-size: 12px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.split-rule-fields > .split-field-error { display: block; margin-top: 7px; }
+.split-manager .split-feedback { margin-top: 14px; }
+.split-manager .split-global-error { margin: 12px 22px 0; }
+.split-preview { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+.split-preview > header { display: flex; align-items: center; gap: 8px; }
+.split-preview > header > svg { color: var(--accent); }
+.split-preview > p { margin-top: 7px; }
+.split-preview ul { margin: 12px 0; padding: 0; list-style: none; }
+.split-preview li { display: grid; grid-template-columns: minmax(90px, 0.8fr) minmax(0, 1.6fr); gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.split-preview li > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-preview li > strong { color: var(--ink); font-size: inherit; font-weight: 550; }
+.split-preview li > span { color: var(--ink-2); }
+.split-manager-footer { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--line); }
+.split-manager-footer > div { display: flex; align-items: center; gap: 8px; }
+.split-manager-footer > p { font-size: 12px; }
+.split-manager .primary-button, .split-manager .secondary-button { display: inline-flex; min-height: 36px; height: auto; align-items: center; justify-content: center; gap: 7px; margin: 0; padding: 8px 12px; font-size: var(--type-body); line-height: 1.35; }
+.split-manager .primary-button:hover:not(:disabled) { filter: brightness(0.92); }
+.split-manager :is(button, input, textarea, select):disabled { opacity: 0.5; cursor: default; }
+.split-manager .split-preview-button, .split-manager .split-manager-create { border: 1px solid var(--line-strong); }
+.split-manager-intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.split-manager-intro p { max-width: 45ch; }
+.split-manager-create { flex: none; }
+.split-manager-list { margin: 18px 0 20px; padding: 0; list-style: none; }
+.split-manager-list > li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.split-manager-row { display: flex; min-width: 0; align-items: center; gap: 4px; }
+.split-manager-edit { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: stretch; gap: 5px; padding: 6px; border-radius: 7px; text-align: left; }
+.split-manager-edit:hover { background: var(--hover); }
+.split-manager-row-name { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.split-manager-row-name strong { min-width: 0; overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.split-state { color: var(--ink-2); font-size: 12px; }
+.split-manager-rule-summary, .split-manager-label { overflow: hidden; color: var(--ink-2); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.split-manager-label { display: flex; min-width: 0; align-items: center; gap: 5px; }
+.split-manager-label svg { flex: none; }
+.split-manager-label > span { overflow: hidden; text-overflow: ellipsis; }
+.split-manager-empty { padding: 32px 0; }
+.split-manager-empty > p { margin-top: 7px; }
+.split-manager .split-notice { margin-top: 14px; }
+.split-remove-confirm { margin-top: 10px; padding: 12px; border-radius: 7px; background: var(--field); }
+.split-remove-confirm > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.split-manager .split-remove-action { color: var(--red); }
+
+@media (max-width: 600px) {
+  .split-manager { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+  .split-manager-body { padding: 18px 16px; }
+  .split-rule-columns { grid-template-columns: minmax(0, 1fr); }
+  .split-manager-intro { flex-direction: column; gap: 12px; }
+  .split-manager-footer { padding: 12px 14px; flex-wrap: wrap; }
+  .split-manager-footer > div { margin-left: auto; }
+  .split-preview li { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .split-inbox-tabs { gap: 10px; }
+  .split-inbox-tabs > button { max-width: 140px; }
+}
