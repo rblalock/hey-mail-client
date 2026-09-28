@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ImboxPosting, ImboxResult, MailboxKey } from "../../shared/contracts";
-import { groupSectionedImbox, IMBOX_SECTION_ORDER, sectionedPostingSource, sectionedSelectionSource } from "./sectioned-imbox";
+import { ACCOUNT_SPLIT_SECTION_ORDER, groupAccountSplitMailboxes, groupSectionedImbox, IMBOX_SECTION_ORDER, sectionedPostingSource, sectionedSelectionSource } from "./sectioned-imbox";
 import { mailToggle } from "./mail-toggles";
 
 const row = (id: string, overrides: Partial<ImboxPosting> = {}): ImboxPosting => ({ id, topicId: `topic-${id}`, subject: id, summary: "", seen: false, createdAt: "2026-09-27T12:00:00Z", contacts: [], sender: { name: "Example" }, visibleEntryCount: 1, ...overrides });
@@ -56,5 +56,38 @@ describe("sectioned Imbox membership", () => {
       const selectedIds = [...ids];
       expect(mailToggle(command, selectedIds, sectionedSelectionSource(mailboxes, selectedIds))?.label).toBe(label);
     }
+  });
+});
+
+describe("account split membership", () => {
+  it("keeps all six physical sources with saved-state precedence and one row per topic", () => {
+    const mailboxes = {
+      imbox: box("imbox", [row("active"), row("seen", { seen: true }), row("due", { bubbledUp: true }), row("later-copy", { topicId: "saved-later" }), row("aside-copy", { topicId: "saved-aside" }), row("future-copy", { topicId: "scheduled", bubbledUp: true })]),
+      laterbox: box("laterbox", [row("later", { topicId: "saved-later", seen: true })]),
+      asidebox: box("asidebox", [row("aside", { topicId: "saved-aside", seen: true }), row("later-aside-copy", { topicId: "saved-later" })]),
+      feedbox: box("feedbox", [row("feed"), row("active-copy", { topicId: "topic-active" })]),
+      trailbox: box("trailbox", [row("trail"), row("feed-copy", { topicId: "topic-feed" })]),
+      bubblebox: box("bubblebox", [row("future", { topicId: "scheduled", bubbledUp: true }), row("later-future-copy", { topicId: "saved-later" })]),
+    };
+    const groups = groupAccountSplitMailboxes(mailboxes);
+    expect(ACCOUNT_SPLIT_SECTION_ORDER.flatMap((key) => groups[key].map((posting) => posting.id))).toEqual(["active", "later", "aside", "due", "feed", "trail", "future", "seen"]);
+    expect(ACCOUNT_SPLIT_SECTION_ORDER.flatMap((key) => groups[key].map((posting) => sectionedPostingSource(mailboxes, posting, true)))).toEqual(["imbox", "laterbox", "asidebox", "imbox", "feedbox", "trailbox", "bubblebox", "imbox"]);
+    expect(groups.bubbledUp.map((posting) => posting.id)).toEqual(["due"]);
+    expect(groups.scheduledBubbleUp.map((posting) => posting.id)).toEqual(["future"]);
+    expect(sectionedSelectionSource(mailboxes, ["feed"], true)).toBe("feedbox");
+    expect(sectionedSelectionSource(mailboxes, ["feed", "trail"], true)).toBe("imbox");
+    expect(groupSectionedImbox(mailboxes).bubbledUp.map((posting) => posting.id)).toEqual(["due", "future-copy"]);
+    expect(sectionedPostingSource(mailboxes, mailboxes.imbox.postings[5]!)).toBe("imbox");
+  });
+
+  it("ignores unavailable sources and deduplicates rows without topic metadata", () => {
+    const groups = groupAccountSplitMailboxes({
+      feedbox: box("feedbox", [row("same", { topicId: undefined })]),
+      trailbox: box("trailbox", [row("same", { topicId: undefined }), row("other", { topicId: undefined })]),
+      bubblebox: { ...box("bubblebox", [row("scheduled")]), status: "unavailable" },
+    });
+    expect(groups.feed.map((posting) => posting.id)).toEqual(["same"]);
+    expect(groups.paperTrail.map((posting) => posting.id)).toEqual(["other"]);
+    expect(groups.scheduledBubbleUp).toEqual([]);
   });
 });

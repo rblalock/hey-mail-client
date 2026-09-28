@@ -13,7 +13,7 @@ const exec = promisify(execFile);
 const session = `hey-split-check-${process.pid}-${Date.now()}`;
 const binary = process.env.AGENT_BROWSER_BIN || "agent-browser";
 const controller = new AbortController();
-const deadline = setTimeout(() => controller.abort(), 110_000);
+const deadline = setTimeout(() => controller.abort(), 180_000);
 const server = await createServer({ configFile: false, root: "src/renderer", plugins: [react(), tailwind()], server: { host: "127.0.0.1", port: 0 } });
 const browser = async (...args) => (await exec(binary, ["--session", session, ...args], {
   timeout: 10_000, signal: controller.signal, maxBuffer: 1_000_000,
@@ -31,6 +31,7 @@ const checkpoint = async (name) => { phase = name; await snapshot(); console.log
 const selectSplit = async (id) => {
   await browser("click", `.split-inbox-tabs [data-split-id="${id}"]`);
   await waitFor(`${selected()}===${JSON.stringify(id)}`);
+  await waitFor(`!document.querySelector('.imbox-titlebar .is-spinning')`);
 };
 const expandHistory = async () => {
   await snapshot();
@@ -54,6 +55,8 @@ const captureEditor = async () => {
   await browser("screenshot", join(artifacts, "split-editor-desktop.png"));
   await browser("set", "viewport", "800", "800");
   await snapshot();
+  await evaluate(`document.querySelector('.split-manager-body').scrollTop=0`);
+  await browser("screenshot", join(artifacts, "split-editor-compact-rules.png"));
   await evaluate(`(() => {
     const body=document.querySelector('.split-manager-body');
     body.scrollTop=body.scrollHeight;
@@ -94,7 +97,8 @@ try {
     const tabs = [...document.querySelectorAll('.split-inbox-tabs [role="tab"]')];
     if (tabs.map(tab => tab.dataset.splitId).join(',') !== 'all,vip,team,github,remaining') throw Error('Initial splits missing or reordered');
     const counts = Object.fromEntries(tabs.map(tab => [tab.dataset.splitId, Number(tab.querySelector('.split-inbox-count')?.textContent || 0)]));
-    if (JSON.stringify(counts) !== JSON.stringify({ all:9, vip:4, team:5, github:1, remaining:2 })) throw Error('Incorrect pending counts: ' + JSON.stringify(counts));
+    if (counts.all!==9 || counts.remaining!==2) throw Error('Incorrect workflow counts: ' + JSON.stringify(counts));
+    if (tabs.filter(tab=>['vip','team','github'].includes(tab.dataset.splitId)).some(tab=>tab.querySelector('.split-inbox-count'))) throw Error('Named split displayed an incomplete total as authoritative');
     return true;
   })()`);
   await browser("screenshot", join(artifacts, "split-tabs-desktop.png"));
@@ -105,8 +109,8 @@ try {
   await evaluate(`(() => {const list=document.querySelector('.imbox-panel .mail-list');list.scrollTop=list.scrollHeight;list.dispatchEvent(new Event('scroll',{bubbles:true}));return true;})()`);
   await browser("wait", rowIn("previouslySeen", "3100"));
   await evaluate(`(() => {
-    const pages = window.__sectionedImboxPreview.requests.flatMap(request => request.options?.page ? [request.options.page] : []);
-    if (!pages.includes('sectioned:100')) throw Error('Older match did not fetch history through index 100: ' + pages);
+    const pages = window.__splitInboxPreview.requests.filter(request=>request.operation==='list'&&request.splitId==='github'&&request.page);
+    if (pages.length<4) throw Error('Older match did not fetch past empty pages: ' + JSON.stringify(pages));
     const rows = [...document.querySelectorAll('.imbox-panel .mail-row')].map(row => row.dataset.postingId);
     if (new Set(rows).size !== rows.length) throw Error('Overlapping history pages rendered duplicate rows');
     if ([...document.querySelectorAll('button')].some(button => /load more/i.test(button.textContent))) throw Error('Unexpected Load More button');
@@ -128,8 +132,8 @@ try {
   await waitFor(`${selected()}==='vip'`);
   await expandHistory();
   await evaluate(`(() => {
-    if (document.querySelectorAll('.sectioned-imbox-group').length!==5) throw Error('Split lost workflow section headings');
-    for (const [section,id] of [['replyLater','2201'],['setAside','2302'],['bubbledUp','2401'],['previouslySeen','3000']]) {
+    if (document.querySelectorAll('.sectioned-imbox-group').length!==8) throw Error('Split lost account workflow section headings');
+    for (const [section,id] of [['replyLater','2201'],['setAside','2302'],['bubbledUp','2401'],['scheduledBubbleUp','2501'],['feed','2601'],['previouslySeen','3000']]) {
       if (!document.querySelector('.sectioned-imbox-group[data-section="'+section+'"] #mail-row-'+id)) throw Error('VIP did not preserve '+section);
     }
     if (document.querySelector('#mail-row-2102')) throw Error('Unmatched Team conversation leaked into VIP');
@@ -146,7 +150,7 @@ try {
   await guardTab(".thread-panel .email-body", "vip", "Reader");
   await browser("press", "Escape");
   await browser("wait", rowIn("setAside", "2302"));
-  await guardTab('.imbox-panel input[placeholder="Search Imbox"]', "vip", "Search");
+  await guardTab('.imbox-panel .mail-search input', "vip", "Search");
   await guardTab(".agent-composer textarea", "vip", "AI composer");
   await browser("focus", "#mail-row-2201");
   await browser("press", "w");
@@ -156,23 +160,54 @@ try {
   await browser("press", "Escape");
   await waitFor(`!document.querySelector('.mail-composer-dialog')`);
 
+  await checkpoint("recover Tab from sidebar, toolbar, and body focus");
+  await browser("focus", '.sidebar nav[aria-label="Mail"] button[data-active="true"]');
+  await browser("press", "Tab");
+  await waitFor(`${selected()}==='team'`);
+  await browser("focus", '.imbox-titlebar button[aria-label="Refresh Team"]');
+  await browser("press", "Shift+Tab");
+  await waitFor(`${selected()}==='vip'`);
+  await evaluate(`document.activeElement?.blur()`);
+  await browser("press", "Tab");
+  await waitFor(`${selected()}==='team'`);
+  await waitFor(`document.activeElement?.classList.contains('mail-row')`);
+  await browser("press", "Enter");
+  await browser("wait", ".thread-panel");
+  await browser("press", "Escape");
+
+  await checkpoint("account-wide Feed and Paper Trail with source-correct Done");
+  await browser("wait", rowIn("feed", "2601"));
+  await browser("wait", rowIn("paperTrail", "2701"));
+  await browser("focus", "#mail-row-2601");
+  await browser("press", "e");
+  await waitFor(`window.__sectionedImboxPreview.snapshot().feedbox.find(row=>row.id==='2601')?.seen===true`);
+  await assert(`Boolean(document.querySelector('${rowIn("feed", "2601")}'))&&!window.__sectionedImboxPreview.snapshot().imbox.some(row=>row.id==='2601')`, "Done moved Feed mail out of its source");
+  await browser("press", "Control+z");
+  await waitFor(`window.__sectionedImboxPreview.snapshot().feedbox.find(row=>row.id==='2601')?.seen===false`);
+
   await checkpoint("command palette navigation and sender/domain drafts");
   await browser("focus", "#mail-row-2201");
   await palette("split-go:team", "Go to split: Team");
   await waitFor(`${selected()}==='team'`);
-  await browser("focus", "#mail-row-2102");
+  await browser("focus", "#mail-row-2301");
   await palette("split-create-person", "Create split from this sender");
   await browser("wait", ".split-editor");
   await snapshot();
-  await assert(`document.querySelector('.split-editor textarea[placeholder="jamie@company.com"]').value==='drew@studio.example'`, "Sender command did not seed the person");
+  await assert(`document.querySelector('[aria-label="People entries"]')?.textContent.includes('drew@studio.example')`, "Sender command did not seed the person");
   await guardTab(".split-editor-name", "team", "Split dialog");
   await assert(`Boolean(document.activeElement?.closest('.split-manager'))`, "Tab escaped the split dialog");
   await browser("press", "Escape");
-  await browser("focus", "#mail-row-2102");
+  await browser("focus", "#mail-row-2301");
   await palette("split-create-domain", "Create split from this sender’s domain");
   await browser("wait", ".split-editor");
   await snapshot();
-  await assert(`document.querySelector('.split-editor textarea[placeholder="company.com"]').value==='studio.example'`, "Domain command did not seed the domain");
+  await assert(`document.querySelector('[aria-label="Domains entries"]')?.textContent.includes('studio.example')`, "Domain command did not seed the domain");
+  await browser("fill", 'input[placeholder="Add a domain"]', "agentcompany.com,agentuity.com");
+  await browser("press", "Enter");
+  await assert(`document.querySelectorAll('[aria-label="Domains entries"] li').length===3`, "Comma-separated domains did not become separate entries");
+  await browser("fill", 'input[placeholder="Add a domain"]', "*.invalid.example");
+  await browser("press", "Enter");
+  await assert(`document.querySelector('input[placeholder="Add a domain"]').value==='*.invalid.example'&&document.querySelector('input[placeholder="Add a domain"]').getAttribute('aria-invalid')==='true'`, "Invalid domain was silently lost or accepted");
   await browser("press", "Escape");
 
   await checkpoint("preview, save, and durable fictional read-back");
@@ -229,6 +264,66 @@ try {
     return true;
   })()`);
 
+  await checkpoint("create manual split from bulk Add to split and merge later rules");
+  await selectSplit("all");
+  await browser("focus", "#mail-row-2102");
+  await browser("press", "x");
+  await browser("focus", "#mail-row-2103");
+  await browser("press", "x");
+  await palette("split-add", "Add to existing split");
+  await browser("wait", ".split-add-dialog");
+  await snapshot();
+  await assert(`document.querySelector('.split-add-dialog input[value="conversation"]').checked`, "Add dialog should default to only selected conversations");
+  await browser("screenshot", join(artifacts, "add-to-split-desktop.png"));
+  await browser("set", "viewport", "800", "800");
+  await assert(`document.querySelector('.split-add-dialog').getBoundingClientRect().right<=innerWidth&&document.querySelector('.split-add-dialog').getBoundingClientRect().bottom<=innerHeight`, "Add dialog overflowed compact viewport");
+  await browser("screenshot", join(artifacts, "add-to-split-compact.png"));
+  await browser("set", "viewport", "1440", "1000");
+  await browser("click", ".split-add-create");
+  await browser("wait", ".split-editor-name");
+  await snapshot();
+  await browser("fill", ".split-editor-name", "Reading");
+  await browser("click", ".split-preview-button");
+  await browser("wait", ".split-preview");
+  await browser("click", '.split-editor button[type="submit"]');
+  await browser("wait", '[aria-label="Edit Reading"]');
+  await browser("press", "Escape");
+  await browser("wait", ".split-add-dialog");
+  await snapshot();
+  const readingId = JSON.parse((await evaluate(`window.__splitInboxPreview.snapshot().splits.find(split=>split.name==='Reading').id`)).trim());
+  await browser("select", ".split-add-dialog select", readingId);
+  await browser("click", '.split-add-dialog button[type="submit"]');
+  await waitFor(`!document.querySelector('.split-add-dialog')`);
+  await assert(`(() => {const fixture=window.__splitInboxPreview;const split=fixture.snapshot().splits.find(split=>split.name==='Reading');const members=fixture.labelSnapshot().find(label=>label.id===split.labelId)?.postingIds;return !split.people.length&&!split.domains.length&&members?.includes('2102')&&members?.includes('2103')})()`, "Bulk addition did not persist manual membership without rules");
+  await selectSplit(readingId);
+  await browser("wait", "#mail-row-2102");
+  await browser("wait", "#mail-row-2103");
+  await browser("focus", "#mail-row-2103");
+  await browser("press", "Enter");
+  await browser("wait", ".thread-panel .email-body");
+  await evaluate(`document.querySelector('.thread-scroll').scrollTop=0`);
+  await snapshot();
+  await assert(`document.querySelector('.thread-panel .message-actions > button:last-child')?.textContent.includes('Add to split')`, "Reader Add to split action missing");
+  await browser("click", '.thread-panel .message-actions > button:last-child');
+  await browser("wait", ".split-add-dialog");
+  await browser("select", ".split-add-dialog select", "team");
+  await browser("check", '.split-add-dialog input[value="domain"]');
+  await browser("click", '.split-add-dialog button[type="submit"]');
+  await waitFor(`!document.querySelector('.split-add-dialog')`);
+  await assert(`(() => {const split=window.__splitInboxPreview.snapshot().splits.find(split=>split.id==='team');return split.domains.includes('studio.example')&&split.domains.includes('northline.example')})()`, "Adding a domain replaced existing rules");
+  await browser("press", "Escape");
+
+  await checkpoint("initial split failure is visible and retry refreshes membership");
+  await selectSplit("all");
+  await evaluate(`(() => {const mail=window.heyAgent.mail;window.__originalSplitList=mail.listSplitMail;let fail=true;mail.listSplitMail=async(...args)=>{if(fail){fail=false;throw Error('Preview offline: try again.')}return window.__originalSplitList(...args)};})()`);
+  await selectSplit("github");
+  await browser("wait", ".imbox-panel .empty-state");
+  await assert(`document.querySelector('.imbox-panel .empty-state').textContent.includes('Preview offline')&&!document.querySelector('.imbox-panel .sectioned-imbox-group')`, "First-load error was hidden behind endless loading sections");
+  await evaluate(`window.__refreshSplitCount=window.__splitInboxPreview.requests.filter(request=>request.operation==='refresh').length`);
+  await browser("click", ".imbox-panel .empty-state button");
+  await browser("wait", "#mail-row-2602");
+  await assert(`window.__splitInboxPreview.requests.filter(request=>request.operation==='refresh').length>window.__refreshSplitCount`, "Named Refresh did not refresh linked label membership");
+
   await checkpoint("manage command and compact layout");
   await palette("split-manage", "Manage splits");
   await browser("wait", '[aria-label="Edit Partners"]');
@@ -245,7 +340,7 @@ try {
   await browser("screenshot", join(artifacts, "split-manager-compact.png"));
   const errors=await browser("errors");
   if (errors.trim()) throw Error(errors);
-  console.log(`PASS: split counts and sections; Tab/Shift+Tab; arrows, Enter, Escape; native typing/reader/modal focus; palette create-person/domain, navigation and manage; non-mutating preview, label application, persisted reload; overlapping Done/Undo; index-100 history via empty filtered pages; desktop and compact bounds. Screenshots: ${artifacts}`);
+  console.log(`PASS: account-wide sections; sidebar/toolbar/body Tab recovery; arrows, Enter, Escape; native editor/reader/dialog focus; comma-separated rules and invalid-input recovery; preview/save and persisted labels; bulk manual split creation; reader Add to split and additive domain rules; source-preserving Done/Undo; empty-page history continuation; first-load error recovery and membership refresh; desktop and compact bounds. Screenshots: ${artifacts}`);
   }
 } catch (error) {
   const state=await evaluate(`JSON.stringify({phase:${JSON.stringify(phase)},split:${selected()},focused:document.activeElement?.outerHTML?.slice(0,500),thread:document.querySelector('.thread-panel h1')?.textContent,dialog:document.querySelector('dialog[open]')?.textContent?.slice(0,500),rows:[...document.querySelectorAll('.imbox-panel .mail-row')].map(row=>row.dataset.postingId),pages:window.__sectionedImboxPreview?.requests.filter(request=>request.options?.page)})`).catch(()=>"State unavailable after timeout.");

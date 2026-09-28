@@ -12,7 +12,11 @@ describe("optional Imbox pagination", () => {
     expect(mailboxCommand("imbox", { paginated: true, page: "cursor=a&b=2" })).toEqual(["box", "view", "imbox", "--page", "cursor=a&b=2", "--json"]);
     expect(mailboxCommand("laterbox")).toEqual(["box", "view", "laterbox", "--all", "--json"]);
     expect(mailboxCommand("asidebox", { paginated: false })).toEqual(["set-aside", "view", "--all", "--json"]);
-    expect(() => mailboxCommand("feedbox", { paginated: true })).toThrow();
+    for (const source of ["feedbox", "trailbox", "laterbox", "bubblebox"] as const) {
+      expect(mailboxCommand(source, { paginated: true })).toEqual(["box", "view", source, "--json"]);
+      expect(mailboxCommand(source, { paginated: true, page: "older" })).toEqual(["box", "view", source, "--page", "older", "--json"]);
+    }
+    expect(mailboxCommand("asidebox", { paginated: true, page: "older" })).toEqual(["set-aside", "view", "--page", "older", "--json"]);
   });
 
   it("allows the CLI's full history URL and does not interpret opaque cursor values", () => {
@@ -20,7 +24,7 @@ describe("optional Imbox pagination", () => {
     expect(mailboxCommand("imbox", { paginated: true, page })).toContain(page);
   });
 
-  it.each([null, [], "page", { paginated: "true" }, { page: "cursor" }, { paginated: false, page: "cursor" },
+  it.each([null, [], "page", { paginated: "true" }, { page: "cursor" }, { paginated: false, page: "cursor" }, { singlePage: true }, { paginated: true, singlePage: "true" },
     ...[0, "", "  ", "line\nfeed", "null\0byte", "delete\x7f", "x".repeat(4097)].map((page) => ({ paginated: true, page })),
   ])("rejects malformed pagination options: %j", (options) => {
     expect(() => mailboxListOptions(options)).toThrow();
@@ -70,6 +74,13 @@ describe("optional Imbox pagination", () => {
   it("loads only one explicitly requested history page even if it contains newly unread mail", async () => {
     vi.mocked(runFile).mockResolvedValue({ stdout: JSON.stringify({ ok: true, data: { next_page: "later", postings: [{ id: 11, seen: false }] } }), stderr: "" });
     expect((await listMailbox("imbox", {}, { paginated: true, page: "history" })).nextPage).toBe("later");
+    expect(runFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows account-wide scans to read exactly one Imbox head without following its active prefix", async () => {
+    vi.mocked(runFile).mockResolvedValue({ stdout: JSON.stringify({ ok: true, data: { next_page: "older", postings: [{ id: 11, seen: false }] } }), stderr: "" });
+    const result = await listMailbox("imbox", {}, { paginated: true, singlePage: true });
+    expect(result).toMatchObject({ status: "ready", nextPage: "older" });
     expect(runFile).toHaveBeenCalledTimes(1);
   });
 

@@ -125,7 +125,7 @@ function bindProfile(): void {
     if (change.topicId) void mailDiskCache.remove(profile, change.topicId).catch(() => undefined);
     else if (change.change === "resync" || change.change === "deleted") void mailDiskCache.clearProfile(profile).catch(() => undefined);
     mainWindow?.webContents.send("mail:changed", change);
-    if (!change.box || ["imbox", "laterbox", "asidebox"].includes(change.box.key)) splitRuntime?.schedule();
+    if (!change.box || ["imbox", "feedbox", "trailbox", "asidebox", "laterbox", "bubblebox"].includes(change.box.key)) splitRuntime?.schedule();
   }, env);
   void heyWatcher.start();
 }
@@ -211,8 +211,11 @@ function registerIpc(): void {
     await splitRuntime!.store.remove(id); return splitRuntime!.get();
   });
   handle("mail:preview-split", async (_event, draft) => splitRuntime!.preview(draft));
+  handle("mail:list-split-mail", (_event, id, page) => splitRuntime!.listMail(id, page));
+  handle("mail:add-to-split", (_event, request) => splitRuntime!.addToSplit(request));
   handle("mail:refresh-splits", async () => {
-    await splitRuntime!.store.refreshMemberships(); await splitRuntime!.refresh(true); return splitRuntime!.get();
+    const runtime = splitRuntime!;
+    await runtime.store.refreshMemberships(); await runtime.refresh(true); return runtime.get();
   });
   handle("mail:list-mailbox", async (_event, box, options) => {
     if (typeof box !== "string") throw new Error("A HEY mailbox is required.");

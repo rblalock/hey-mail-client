@@ -4,24 +4,24 @@ import { sectionedPostingSource } from "./sectioned-imbox";
 import { bulkMutationRequest } from "./bulk-actions";
 import type { ShortcutId } from "./shortcuts";
 
-export function sectionedDoneRequest(postings: ImboxPosting[], mailboxes: MailboxCache): MailMutationRequest | undefined {
+export function sectionedDoneRequest(postings: ImboxPosting[], mailboxes: MailboxCache, accountSplit = false): MailMutationRequest | undefined {
   if (!postings.length || postings.some((posting) => posting.kind === "bundle" || !posting.topicId)) return undefined;
   const completion: MailCompletionState[] = postings.map((posting) => {
-    const sourceBox = sectionedPostingSource(mailboxes, posting);
+    const sourceBox = sectionedPostingSource(mailboxes, posting, accountSplit);
     return { id: posting.id, sourceBox, seen: posting.seen, bubbledUp: sourceBox === "imbox" && posting.bubbledUp === true,
       ...(sourceBox === "asidebox" && posting.boxGroupId ? { boxGroupId: posting.boxGroupId } : {}) };
   });
   return { operation: "done", postingIds: completion.map((item) => item.id), completion };
 }
 
-export function sectionedActionRequests(id: ShortcutId, postings: ImboxPosting[], mailboxes: MailboxCache): MailMutationRequest[] {
+export function sectionedActionRequests(id: ShortcutId, postings: ImboxPosting[], mailboxes: MailboxCache, accountSplit = false): MailMutationRequest[] {
   if (id === "seen") {
-    const request = sectionedDoneRequest(postings, mailboxes);
+    const request = sectionedDoneRequest(postings, mailboxes, accountSplit);
     return request ? [request] : [];
   }
   const grouped = new Map<MailCompletionState["sourceBox"], ImboxPosting[]>();
   for (const posting of postings) {
-    const source = sectionedPostingSource(mailboxes, posting);
+    const source = sectionedPostingSource(mailboxes, posting, accountSplit);
     grouped.set(source, [...(grouped.get(source) ?? []), posting]);
   }
   const requests: MailMutationRequest[] = [];
@@ -34,7 +34,7 @@ export function sectionedActionRequests(id: ShortcutId, postings: ImboxPosting[]
     } else if (id === "unread") {
       requests.push({ operation: postings.every((posting) => !posting.seen) ? "seen" : "unseen", postingIds });
     } else if (id === "bubble") {
-      requests.push(postings.every((posting) => posting.bubbledUp)
+      requests.push(postings.every((posting) => sectionedPostingSource(mailboxes, posting, accountSplit) === "bubblebox" || posting.bubbledUp)
         ? { operation: "bubble-pop", postingIds, sourceBox }
         : { operation: "bubble", postingIds, sourceBox, bubbleSchedule: "tomorrow" });
     } else {

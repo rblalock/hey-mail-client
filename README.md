@@ -27,9 +27,11 @@ Move with `J` / `K`, open with `Enter`, and select with `X` or `Shift+J` / `Shif
 
 Choose **Sectioned** in the Imbox header or Settings → Mail to try the alternate layout. Read Active mail clears to Previously Seen when you leave it; kept mail stays until you press `E` for Done. You can switch back to **HEY** at any time.
 
-Choose **Splits** to create named views for people or domains. Each keeps the same workflow sections. Conversations can appear in several splits; **Remaining** shows those outside your enabled splits. Rules add HEY labels while the app runs, and check older mail as you load it. Disabling or removing a split leaves its label and mail untouched.
+Choose **Splits** to create a named view across Imbox, Reply Later, Set Aside, Bubble Up, Feed, and Paper Trail. Add people or domains with commas, new lines, or Enter. Matching mail stays in its original HEY area; older matches load as you scroll. The existing sidebar areas are unchanged.
 
-Use `Tab` / `Shift+Tab` while focused in the mail list to switch splits. `Ctrl+K` also offers split navigation, creation from the selected conversation’s person or domain, and split settings.
+Use **Add to split** on a conversation or selection to add it to an existing split. You can add just those conversations, or include their people or domains in the rules. Leave rules empty for a split you fill yourself. Splits use HEY labels you can open on mobile; disabling or removing a split keeps its label and mail. **All** and **Remaining** keep the Imbox workflow view.
+
+Use `Tab` / `Shift+Tab` to switch splits while working in mail, including from the mail toolbar or sidebar. Typing areas, dialogs, and AI chat keep normal Tab behavior. `Ctrl+K` also offers split navigation, creation, **Add to existing split**, and split settings.
 
 ![Inbox with Bubbled Up, New For You, and Previously Seen sections, two selected conversations, and bulk actions.](docs/screenshots/inbox.png)
 
@@ -95,7 +97,7 @@ HEY-like defaults on Linux. Single-letter shortcuts work outside text fields. Th
 | `K` or `↑` | Previous conversation |
 | `Enter` | Open conversation |
 | `Esc` | Close conversation or clear selection |
-| `Tab` / `Shift+Tab` | Next / previous split when the split mail list has focus |
+| `Tab` / `Shift+Tab` | Next / previous split while working in the mail list or mail navigation |
 | `X` | Toggle selection |
 | `Shift+J` or `Shift+↓` | Extend selection down |
 | `Shift+K` or `Shift+↑` | Extend selection up |

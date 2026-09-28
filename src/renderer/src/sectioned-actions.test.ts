@@ -51,4 +51,35 @@ describe("sectioned Imbox actions", () => {
     expect(cursorAfterRemoval(rows, "1", new Set(["1", "2", "3"]))).toBeUndefined();
     expect(cursorAfterRemoval(rows, undefined, new Set())).toBe("1");
   });
+  it("keeps Feed, Paper Trail and scheduled source snapshots for Done without inventing due reminders", () => {
+    const feed = posting("5");
+    const trail = posting("6", { seen: true });
+    const future = posting("7", { bubbledUp: true });
+    const account = { ...mailboxes, feedbox: box("feedbox", [feed]), trailbox: box("trailbox", [trail]), bubblebox: box("bubblebox", [future]) };
+    const requests = sectionedActionRequests("seen", [feed, trail, future, later], account, true);
+    expect(requests).toEqual([{ operation: "done", postingIds: ["5", "6", "7", "2"], completion: [
+      { id: "5", sourceBox: "feedbox", seen: false, bubbledUp: false },
+      { id: "6", sourceBox: "trailbox", seen: true, bubbledUp: false },
+      { id: "7", sourceBox: "bubblebox", seen: false, bubbledUp: false },
+      { id: "2", sourceBox: "laterbox", seen: true, bubbledUp: false },
+    ] }]);
+    expect(requests.some((request) => request.operation === "move")).toBe(false);
+  });
+  it("routes mixed account moves and trash to each physical source", () => {
+    const feed = posting("5");
+    const trail = posting("6", { seen: true });
+    const future = posting("7");
+    const account = { ...mailboxes, feedbox: box("feedbox", [feed]), trailbox: box("trailbox", [trail]), bubblebox: box("bubblebox", [future]) };
+    expect(sectionedActionRequests("bulk-feed", [active, feed, trail, future], account, true)).toEqual([
+      { operation: "move", postingIds: ["1"], sourceBox: "imbox", destination: "feedbox" },
+      { operation: "move", postingIds: ["6"], sourceBox: "trailbox", destination: "feedbox" },
+      { operation: "move", postingIds: ["7"], sourceBox: "bubblebox", destination: "feedbox" },
+    ]);
+    expect(sectionedActionRequests("trash", [feed, trail], account, true)).toEqual([
+      { operation: "trash", postingIds: ["5"], sourceBox: "feedbox" },
+      { operation: "trash", postingIds: ["6"], sourceBox: "trailbox" },
+    ]);
+    expect(sectionedActionRequests("bubble", [future], account, true)).toEqual([{ operation: "bubble-pop", postingIds: ["7"], sourceBox: "bubblebox" }]);
+    expect(sectionedActionRequests("unread", [feed, trail], account, true).map((request) => request.operation)).toEqual(["unseen", "unseen"]);
+  });
 });

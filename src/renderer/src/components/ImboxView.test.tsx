@@ -163,4 +163,38 @@ describe("Imbox section presentation", () => {
     expect(feed(".sectioned-imbox-group, .imbox-layout-switch, .is-compact")).toHaveLength(0);
     expect(feed(".mail-row")).toHaveLength(1);
   });
+
+  it("renders account split source sections and keeps scheduled reminders separate from returned reminders", () => {
+    const result = { ...imbox([]), boxName: "Work", nextPage: "split-next" };
+    const $ = render(result, false, ["feed"], { accountSplit: true, onLayoutChange: noop, onAddToSplit: noop, sectionMailboxes: {
+      imbox: imbox([row("active", false), row("due", true, true), row("seen", true)]),
+      laterbox: { ...imbox([row("later", true)]), boxKey: "laterbox" },
+      asidebox: { ...imbox([row("aside", true)]), boxKey: "asidebox" },
+      feedbox: { ...imbox([row("feed", false)]), boxKey: "feedbox" },
+      trailbox: { ...imbox([row("trail", true)]), boxKey: "trailbox" },
+      bubblebox: { ...imbox([row("scheduled", false, true)]), boxKey: "bubblebox" },
+    } });
+    expect($(".sectioned-imbox-heading button span").map((_, el) => $(el).text()).get()).toEqual(["Active", "Reply Later", "Set Aside", "Bubbled Up", "The Feed", "Paper Trail", "Scheduled Bubble Up", "Previously Seen"]);
+    expect($(".mail-row").map((_, el) => $(el).attr("data-posting-id")).get()).toEqual(["active", "later", "aside", "due", "feed", "trail", "scheduled", "seen"]);
+    expect($(".sectioned-imbox-heading em").map((_, el) => $(el).text()).get()).toEqual(Array(8).fill("1 loaded"));
+    expect($("[data-section=scheduledBubbleUp] .bubbled-up-mark")).toHaveLength(0);
+    expect($("[data-section=bubbledUp] .bubbled-up-mark")).toHaveLength(1);
+    expect($(".imbox-layout-switch")).toHaveLength(0);
+    expect($(".bulk-action-bar button").filter((_, el) => $(el).text() === "Add to Split")).toHaveLength(1);
+    expect($(".sectioned-imbox-sentinel").parent().hasClass("mail-list")).toBe(true);
+  });
+
+  it("keeps split paging and Retry outside collapsed history, including pages with no matches", () => {
+    vi.stubGlobal("window", { localStorage: { getItem: (key: string) => key.endsWith("work:split-a") ? JSON.stringify(["previouslySeen", "feed"]) : null } });
+    const extra = { accountSplit: true, profileKey: "work:split-a", sectionMailboxes: { imbox: imbox([]), feedbox: { ...imbox([row("feed", false)]), boxKey: "feedbox" as const } }, onLoadMore: noop, loadMoreError: "Split history could not load." };
+    const $ = render({ ...imbox([]), nextPage: "empty-page-next" }, false, [], extra);
+    expect($(".mail-row")).toHaveLength(0);
+    expect($("[data-section=previouslySeen] button[aria-expanded=false], [data-section=feed] button[aria-expanded=false]")).toHaveLength(2);
+    expect($(".sectioned-imbox-sentinel")).toHaveLength(1);
+    expect($(".sectioned-imbox-pagination-error button").text()).toBe("Retry");
+    expect($("button").filter((_, el) => /load more/i.test($(el).text()))).toHaveLength(0);
+    const other = render(imbox([]), false, [], { ...extra, profileKey: "work:split-b", loadMoreError: undefined });
+    expect(other("[data-section=feed] button[aria-expanded=true]")).toHaveLength(1);
+    expect(other(".mail-row")).toHaveLength(1);
+  });
 });

@@ -4,6 +4,9 @@ import type { MailLibraryItem } from "../../../shared/contracts";
 import { normalizeMailSplitDraft, type MailSplit, type MailSplitDraft, type MailSplitPreview } from "../../../shared/mail-splits";
 import { trapFocus } from "../composer-keyboard";
 import "../split-inbox.css";
+import SplitRuleInput, { acceptSplitRuleInput, splitRuleTokens, type SplitRuleInputValue, type SplitRuleKind } from "./SplitRuleInput";
+
+export { splitRuleTokens } from "./SplitRuleInput";
 
 export type SplitInboxManagerProps = {
   splits: MailSplit[];
@@ -22,38 +25,43 @@ type EditorFields = {
   enabled: boolean;
   people: string;
   domains: string;
+  peoplePending?: string;
+  domainsPending?: string;
   labelId?: string;
   labelName: string;
 };
 
 function fieldsFrom(draft: Partial<MailSplitDraft> = {}): EditorFields {
+  const people = acceptSplitRuleInput("people", [], draft.people?.join(", ") ?? "");
+  const domains = acceptSplitRuleInput("domains", [], draft.domains?.join(", ") ?? "");
   return {
     id: draft.id,
     name: draft.name ?? "",
     enabled: draft.enabled ?? true,
-    people: draft.people?.join(", ") ?? "",
-    domains: draft.domains?.join(", ") ?? "",
+    people: people.entries.join(", "),
+    domains: domains.entries.join(", "),
+    peoplePending: people.draft,
+    domainsPending: domains.draft,
     labelId: draft.labelId,
     labelName: draft.labelName ?? draft.name ?? "",
   };
 }
 
-export function splitRuleTokens(value: string): string[] {
-  return [...new Set(value.split(/[,;\n]+/).map((token) => token.trim().toLowerCase()).filter(Boolean))];
+function fieldTokens(fields: EditorFields, kind: SplitRuleKind): string[] {
+  return splitRuleTokens(`${fields[kind]}, ${fields[`${kind}Pending`] ?? ""}`);
 }
 
 export function splitEditorValidation(fields: EditorFields): Record<string, string> {
   const issues: Record<string, string> = {};
-  const people = splitRuleTokens(fields.people);
-  const domains = splitRuleTokens(fields.domains);
+  const people = fieldTokens(fields, "people");
+  const domains = [...new Set(fieldTokens(fields, "domains").map((domain) => domain.replace(/^@/, "")))];
   const valid: MailSplitDraft = { name: "Split", enabled: false, people: ["preview@example.com"], domains: [], labelName: "Split" };
   const values = { name: fields.name, people, domains, labelName: fields.labelName, ...(fields.labelId ? { labelId: fields.labelId } : {}) };
   for (const [key, value] of Object.entries(values)) {
-    // Keep form and IPC validation identical. An empty People field is valid if a domain exists.
-    try { normalizeMailSplitDraft({ ...valid, ...(key === "people" && !people.length ? { domains: ["example.com"] } : {}), [key]: value }); }
+    // Validate each field independently with the same rules used by IPC.
+    try { normalizeMailSplitDraft({ ...valid, ...(key === "labelName" && fields.labelId ? { labelId: "1" } : {}), [key]: value }); }
     catch (reason) { issues[key] = messageOf(reason, "Check this value."); }
   }
-  if (!people.length && !domains.length) issues.rules = "Add at least one person or domain.";
   return issues;
 }
 
@@ -62,8 +70,8 @@ function draftFrom(fields: EditorFields): MailSplitDraft {
     ...(fields.id ? { id: fields.id } : {}),
     name: fields.name.trim(),
     enabled: fields.enabled,
-    people: splitRuleTokens(fields.people),
-    domains: [...new Set(splitRuleTokens(fields.domains).map((domain) => domain.replace(/^@/, "")))],
+    people: fieldTokens(fields, "people"),
+    domains: [...new Set(fieldTokens(fields, "domains").map((domain) => domain.replace(/^@/, "")))],
     ...(fields.labelId ? { labelId: fields.labelId } : {}),
     labelName: fields.labelName.trim(),
   };
@@ -94,6 +102,7 @@ export default function SplitInboxManager({ splits, labels, initialDraft, errors
 
   const editing = Boolean(fields);
   const editId = fields?.id;
+  const hasRules = Boolean(fields && (fieldTokens(fields, "people").length || fieldTokens(fields, "domains").length));
   useEffect(() => {
     dialog.current?.querySelector<HTMLElement>(editing ? ".split-editor-name" : ".split-manager-create")?.focus();
   }, [editing, editId]);
@@ -107,22 +116,33 @@ export default function SplitInboxManager({ splits, labels, initialDraft, errors
     setFields((current) => current ? { ...current, ...patch } : current);
     setPreview(undefined); setValidation({}); setError(undefined);
   };
+  const changeRules = (kind: SplitRuleKind, value: SplitRuleInputValue) => {
+    change({ [kind]: value.entries.join(", "), [`${kind}Pending`]: value.draft });
+    if (value.error) setValidation({ [kind]: value.error });
+  };
   const checkedDraft = () => {
     if (!fields) return;
-    const issues = splitEditorValidation(fields);
+    const people = acceptSplitRuleInput("people", splitRuleTokens(fields.people), fields.peoplePending ?? "");
+    const domains = acceptSplitRuleInput("domains", splitRuleTokens(fields.domains), fields.domainsPending ?? "");
+    const nextFields = { ...fields, people: people.entries.join(", "), domains: domains.entries.join(", "), peoplePending: people.draft, domainsPending: domains.draft };
+    setFields(nextFields);
+    const issues = splitEditorValidation(nextFields);
     setValidation(issues);
     if (Object.keys(issues).length) {
       requestAnimationFrame(() => dialog.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
       return;
     }
-    return draftFrom(fields);
+    return draftFrom(nextFields);
   };
   const inspect = async () => {
     if (inFlight.current) return;
     const draft = checkedDraft();
     if (!draft) return;
     inFlight.current = true; setBusy("preview"); setError(undefined); setPreview(undefined);
-    try { setPreview(await onPreview(draft)); }
+    try {
+      setPreview(await onPreview(draft));
+      requestAnimationFrame(() => dialog.current?.querySelector('.split-preview')?.scrollIntoView({ block: "nearest" }));
+    }
     catch (reason) { setError(messageOf(reason, "Could not preview this split. Try again.")); }
     finally { inFlight.current = false; setBusy(undefined); }
   };
@@ -163,7 +183,7 @@ export default function SplitInboxManager({ splits, labels, initialDraft, errors
 
     {Object.entries(errors).filter(([key]) => !splits.some((split) => split.id === key)).map(([key, message]) => <p key={key} className="split-feedback split-global-error" role="alert">{message}</p>)}
 
-    {fields ? <form className="split-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+    {fields ? <form className="split-editor" onSubmit={(event) => { event.preventDefault(); void (fields.enabled && !preview ? inspect() : save()); }}>
       <div className="split-manager-body">
         <fieldset disabled={Boolean(busy)} className="split-editor-fields">
           <label className="split-field" htmlFor={`${id}-name`}><span>Name</span>
@@ -171,11 +191,12 @@ export default function SplitInboxManager({ splits, labels, initialDraft, errors
               onChange={(event) => change({ name: event.target.value, ...(!fields.labelId && fields.labelName === fields.name ? { labelName: event.target.value } : {}) })} />{fieldError("name")}</label>
 
           <section className="split-rule-fields" aria-labelledby={`${id}-rules-title`}>
-            <h3 id={`${id}-rules-title`}>People and domains</h3><p id={`${id}-rules-help`}>Conversations with any of these people or domains belong in this split, including your replies. Separate entries with commas or new lines.</p>
+            <h3 id={`${id}-rules-title`}>People and domains</h3><p id={`${id}-rules-help`}>Conversations with any of these people or domains belong in this split, including your replies. Press Enter or use commas or new lines to add entries.</p>
+            <p className="split-field-help">Leave empty to add conversations yourself.</p>
             <div className="split-rule-columns">
-              <label className="split-field" htmlFor={`${id}-people`}><span>People</span><textarea id={`${id}-people`} value={fields.people} rows={3} spellCheck={false} autoCapitalize="none" placeholder="jamie@company.com" aria-invalid={Boolean(validation.people || validation.rules)} aria-describedby={`${id}-rules-help${validation.people ? ` ${id}-people-error` : ""}${validation.rules ? ` ${id}-rules-error` : ""}`} onChange={(event) => change({ people: event.target.value })} />{fieldError("people")}</label>
-              <label className="split-field" htmlFor={`${id}-domains`}><span>Domains</span><textarea id={`${id}-domains`} value={fields.domains} rows={3} spellCheck={false} autoCapitalize="none" placeholder="company.com" aria-invalid={Boolean(validation.domains)} aria-describedby={`${id}-rules-help ${id}-domains-help${validation.domains ? ` ${id}-domains-error` : ""}`} onChange={(event) => change({ domains: event.target.value })} /><span className="split-field-help" id={`${id}-domains-help`}>Exact domains only. Add subdomains separately.</span>{fieldError("domains")}</label>
-            </div>{fieldError("rules")}
+              <SplitRuleInput id={`${id}-people`} kind="people" entries={splitRuleTokens(fields.people)} draft={fields.peoplePending ?? ""} error={validation.people} describedBy={`${id}-rules-help`} onChange={(value) => changeRules("people", value)} />
+              <SplitRuleInput id={`${id}-domains`} kind="domains" entries={splitRuleTokens(fields.domains)} draft={fields.domainsPending ?? ""} error={validation.domains} describedBy={`${id}-rules-help`} onChange={(value) => changeRules("domains", value)} />
+            </div>
           </section>
 
           <section className="split-label-fields" aria-labelledby={`${id}-label-title`}>
@@ -190,26 +211,28 @@ export default function SplitInboxManager({ splits, labels, initialDraft, errors
               </select>{fieldError("labelId")}
             </label>
             {!fields.labelId && <label className="split-field" htmlFor={`${id}-label-name`}><span>New label name</span><input id={`${id}-label-name`} value={fields.labelName} maxLength={120} autoComplete="off" aria-invalid={Boolean(validation.labelName)} aria-describedby={validation.labelName ? `${id}-labelName-error` : undefined} onChange={(event) => change({ labelName: event.target.value })} />{fieldError("labelName")}</label>}
+            {!fields.labelId && !hasRules && <p className="split-field-help">The HEY label will be created when you first add a conversation.</p>}
             {fields.labelId && <p className="split-field-help">Conversations already carrying this label also appear in the split.</p>}
           </section>
 
           <label className="split-enabled"><input type="checkbox" checked={fields.enabled} onChange={(event) => change({ enabled: event.target.checked })} /><span>Enable this split</span></label>
-          <p className="split-sync-note">Labels are applied while HEY Agent is running. Turning off a split keeps its HEY label.</p>
+          <p className="split-sync-note">{hasRules ? "Labels are applied while HEY Agent is running." : "Conversations you add are kept in its HEY label."} Turning off a split keeps its HEY label.</p>
         </fieldset>
 
         {preview && <section className="split-preview" aria-label="Matching conversations" aria-live="polite">
           <header><Check size={16} /><h3>{preview.count} matching {preview.count === 1 ? "conversation" : "conversations"}</h3></header>
           <p>{preview.scope}</p>
-          {preview.samples.length ? <ul>{preview.samples.map((posting) => <li key={posting.id}><strong title={posting.sender.name}>{posting.sender.name}</strong><span title={posting.subject}>{posting.subject || "(No subject)"}</span></li>)}</ul> : <p>No matching mail in this preview. New matches will appear as mail arrives.</p>}
-          <p className="split-sync-note">Preview only. Saving an enabled split starts applying its label.</p>
+          {preview.samples.length ? <ul>{preview.samples.map((posting) => <li key={posting.id}><strong title={posting.sender.name}>{posting.sender.name}</strong><span title={posting.subject}>{posting.subject || "(No subject)"}</span></li>)}</ul> : <p>{hasRules ? "No matching mail in this preview. New matches will appear as mail arrives." : "No conversations yet. Save this split, then add conversations from your mail list."}</p>}
+          <p className="split-sync-note">{hasRules ? "Preview only. Saving an enabled split starts applying its label." : "Only conversations you add or that already carry its HEY label will appear here."}</p>
         </section>}
         {Object.keys(validation).length > 0 && <p className="split-feedback" role="alert">Check the highlighted fields.</p>}
         {error && <p className="split-feedback" role="alert">{error}</p>}
       </div>
+      {fields.enabled && !preview && <p id={`${id}-review-help`} className="split-review-guidance">Review matching conversations first. You can save the split after reviewing.</p>}
       <footer className="split-manager-footer">
         <button type="button" className="secondary-button" disabled={Boolean(busy)} onClick={back}>Cancel</button>
-        <div><button type="button" className="secondary-button split-preview-button" disabled={Boolean(busy)} onClick={() => void inspect()}>{busy === "preview" && <RefreshCw size={15} className="is-spinning" />}{busy === "preview" ? "Checking matches…" : "Preview matches"}</button>
-          <button type="submit" className="primary-button" disabled={Boolean(busy) || (fields.enabled && !preview)} title={fields.enabled && !preview ? "Preview matches before saving" : undefined}>{busy === "save" ? "Saving…" : "Save split"}</button></div>
+        <div>{(!fields.enabled || preview) && <button type="button" className="secondary-button split-preview-button" disabled={Boolean(busy)} onClick={() => void inspect()}>{busy === "preview" && <RefreshCw size={15} className="is-spinning" />}{busy === "preview" ? "Checking matches…" : preview ? "Review again" : "Review matches"}</button>}
+          <button type="submit" className={`primary-button${fields.enabled && !preview ? " split-preview-button" : ""}`} disabled={Boolean(busy)} aria-describedby={fields.enabled && !preview ? `${id}-review-help` : undefined}>{busy === "preview" && <RefreshCw size={15} className="is-spinning" />}{busy === "save" ? "Saving…" : busy === "preview" ? "Checking matches…" : fields.enabled && !preview ? "Review matches" : "Save split"}</button></div>
       </footer>
     </form> : <>
       <div className="split-manager-body">
@@ -219,7 +242,7 @@ export default function SplitInboxManager({ splits, labels, initialDraft, errors
         {splits.length ? <ul className="split-manager-list">{splits.map((split) => <li key={split.id}>
           <div className="split-manager-row"><button type="button" className="split-manager-edit" onClick={() => edit(split)} disabled={Boolean(busy)} aria-label={`Edit ${split.name}`}>
             <span className="split-manager-row-name"><strong title={split.name}>{split.name}</strong><span className="split-state">{split.enabled ? "On" : "Off"}</span></span>
-            <span className="split-manager-rule-summary" title={[...split.people, ...split.domains].join(", ")}>{[...split.people, ...split.domains].join(", ")}</span>
+            <span className="split-manager-rule-summary" title={[...split.people, ...split.domains].join(", ")}>{[...split.people, ...split.domains].join(", ") || "Conversations you add yourself"}</span>
             <span className="split-manager-label" title={split.labelName}><Tag size={13} /><span>{split.labelName}</span></span>
           </button><button type="button" className="icon-button" aria-label={`Edit ${split.name} rules`} title="Edit split" disabled={Boolean(busy)} onClick={() => edit(split)}><Pencil size={16} /></button>
             <button type="button" className="icon-button" aria-label={`Remove ${split.name}`} title="Remove split" disabled={Boolean(busy)} onClick={() => setRemoveId(split.id)}><Trash2 size={16} /></button></div>

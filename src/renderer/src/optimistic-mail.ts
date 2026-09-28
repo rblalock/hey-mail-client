@@ -45,9 +45,12 @@ export function applyOptimisticMailMutation(
     const restore = request.operation === "undo-done";
     mailboxes = { ...current };
     for (const state of request.completion) {
-      const original = Object.values(mailboxes).flatMap((box) => box?.postings ?? []).find((posting) => posting.id === state.id);
+      const original = mailboxes[state.sourceBox]?.postings.find((posting) => posting.id === state.id)
+        ?? Object.values(mailboxes).flatMap((box) => box?.postings ?? []).find((posting) => posting.id === state.id);
       if (!original) continue;
-      const destination = restore ? state.sourceBox : "imbox";
+      const staysInSource = state.sourceBox === "feedbox" || state.sourceBox === "trailbox" || state.sourceBox === "bubblebox";
+      const destination = restore || staysInSource ? state.sourceBox : "imbox";
+      const previousIndex = staysInSource ? mailboxes[destination]?.postings.findIndex((posting) => posting.id === state.id) ?? -1 : -1;
       const updated = { ...original, seen: restore ? state.seen : true, bubbledUp: restore ? state.bubbledUp : false,
         boxGroupId: restore ? state.boxGroupId : undefined };
       for (const key of Object.keys(mailboxes) as MailboxKey[]) {
@@ -55,9 +58,11 @@ export function applyOptimisticMailMutation(
         if (box) mailboxes[key] = { ...box, postings: box.postings.filter((posting) => posting.id !== state.id && !(original.topicId && posting.topicId === original.topicId)) };
       }
       const box = mailboxes[destination] ?? { status: "ready" as const, boxKey: destination, boxName: destination, postings: [] };
-      mailboxes[destination] = { ...box, postings: [updated, ...box.postings] };
+      const postings = [...box.postings];
+      postings.splice(Math.max(0, previousIndex), 0, updated);
+      mailboxes[destination] = { ...box, postings };
     }
-    return { mailboxes, removedFromActiveMailbox: !restore };
+    return { mailboxes, removedFromActiveMailbox: !restore && request.completion.some((state) => ["imbox", "laterbox", "asidebox"].includes(state.sourceBox)) };
   }
 
   if (request.operation === "bubble-pop") {

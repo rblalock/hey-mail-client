@@ -1,12 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type { ImboxPosting, ImboxResult, MailboxKey } from "../shared/contracts";
 import { MailSplits } from "./mail-splits";
 import { listLibrary, listLibraryThreads, listMailbox, updateMailOrganization } from "./hey";
 import { profileRequest } from "./profile-process";
-import { normalizeMailSplitDraft, type MailSplitState } from "../shared/mail-splits";
+import { isMailSplitId, normalizeMailSplitDraft, SPLIT_MAILBOXES, splitContainsPosting, type MailSplitPage, type MailSplitState } from "../shared/mail-splits";
 import { createSplitLabel } from "./split-label";
 
 type Context = NonNullable<ReturnType<typeof profileRequest.getStore>>;
-const BOXES: MailboxKey[] = ["imbox", "laterbox", "asidebox"];
+const BOXES = SPLIT_MAILBOXES;
+const MAX_LIST_PAGES = 6;
+type SplitCursor = { splitId: string; definition: string; sources: { box: MailboxKey; page?: string; visited: string[] }[] };
 
 /** A runtime belongs to one immutable account context, including queued work. */
 export class SplitRuntime {
@@ -18,6 +21,7 @@ export class SplitRuntime {
   private scanAgain = false;
   private forceScan = false;
   private error?: string;
+  private cursors = new Map<string, SplitCursor>();
 
   constructor(file: string, private context: Context, private onChange: (state: MailSplitState) => void, runWrite: <T>(task: () => Promise<T>) => Promise<T>, ownEmail?: string) {
     const scoped = <T>(task: () => Promise<T>) => profileRequest.run(context, task);
@@ -36,6 +40,56 @@ export class SplitRuntime {
   }
 
   async get(): Promise<MailSplitState> { return this.withError(await this.store.get()); }
+
+  async addToSplit(request: unknown): Promise<MailSplitState> {
+    this.assertRunning();
+    await this.store.addToSplit(request);
+    this.assertRunning();
+    return this.get();
+  }
+
+  /** Account-wide lenses retain each row's real source for grouping and actions. */
+  async listMail(id: unknown, page?: unknown): Promise<MailSplitPage> {
+    this.assertRunning();
+    if (!isMailSplitId(id)) throw new Error("Choose a valid split.");
+    if (page !== undefined && (typeof page !== "string" || !/^[a-f0-9-]{36}$/.test(page))) throw new Error("This split page has expired. Refresh to continue.");
+    const state = await this.store.listingState(id);
+    this.assertRunning();
+    const split = state.splits.find((item) => item.id === id)!;
+    const definition = JSON.stringify(split);
+    const saved = typeof page === "string" ? this.cursors.get(page) : undefined;
+    if (page !== undefined && (!saved || saved.splitId !== id || saved.definition !== definition)) throw new Error("This split changed or its page expired. Refresh to continue.");
+    const cursor: SplitCursor = saved ? structuredClone(saved) : { splitId: id, definition, sources: BOXES.map((box) => ({ box, visited: [] })) };
+    const mailboxes: MailSplitPage["mailboxes"] = {};
+    const observed: ImboxPosting[] = [];
+    for (let count = 0; count < MAX_LIST_PAGES && cursor.sources.length; count += 1) {
+      this.assertRunning();
+      const source = cursor.sources.shift()!;
+      const result = await this.readSource(source.box, source.page);
+      this.assertRunning();
+      observed.push(...result.postings);
+      const matches = result.postings.filter((posting) => splitContainsPosting(posting, split, state.memberships, state.ownEmail));
+      const previous = mailboxes[source.box]?.postings ?? [];
+      const { nextPage: sourceNext, ...metadata } = result;
+      mailboxes[source.box] = { ...metadata, postings: [...new Map([...previous, ...matches].map((posting) => [posting.id, posting])).values()] };
+      if (sourceNext) {
+        if (sourceNext === source.page || source.visited.includes(sourceNext)) throw new Error("Split history stopped making progress. Refresh to continue.");
+        cursor.sources.push({ box: source.box, page: sourceNext, visited: [...source.visited, sourceNext] });
+      }
+    }
+    const current = (await this.store.get()).splits.find((item) => item.id === id);
+    this.assertRunning();
+    if (JSON.stringify(current) !== definition) throw new Error("This split changed. Refresh to continue.");
+    let nextPage: string | undefined;
+    if (cursor.sources.length) {
+      nextPage = randomUUID();
+      this.cursors.set(nextPage, cursor);
+      while (this.cursors.size > 100) this.cursors.delete(this.cursors.keys().next().value!);
+    }
+    // Empty match pages intentionally keep a continuation: older sources may match.
+    if (!this.scan && !this.timer) void this.store.observe(observed).catch(() => undefined);
+    return { mailboxes, ...(nextPage ? { nextPage } : {}) };
+  }
 
   observe(box: MailboxKey, result: ImboxResult): void {
     // A pending snapshot invalidates incremental reads that may have started
@@ -104,18 +158,34 @@ export class SplitRuntime {
       const postings: ImboxPosting[] = [];
       for (const box of BOXES) {
         if (this.stopped) throw new Error("This account is no longer active.");
-        const result = await profileRequest.run(this.context, () => listMailbox(box, this.context.env, box === "imbox" ? { paginated: true } : undefined));
-        if (result.status !== "ready") throw new Error("Could not check Imbox, Reply Later, and Set Aside. Refresh and try again.");
+        const result = await this.readSource(box);
         postings.push(...result.postings);
       }
       if (this.stopped) throw new Error("This account is no longer active.");
       return postings;
     })().catch((cause: unknown) => {
-      throw new Error(this.stopped ? "This account is no longer active." : "Could not check Imbox, Reply Later, and Set Aside. Refresh and try again.", { cause });
+      throw new Error(this.stopped ? "This account is no longer active." : "Could not check all six mailboxes. Refresh and try again.", { cause });
     }).finally(() => { if (this.snapshotRead === reading) this.snapshotRead = undefined; });
     this.snapshotRead = reading;
     return reading;
   }
 
-  stop(): void { this.stopped = true; clearTimeout(this.timer); this.store.stop(); }
+  private assertRunning(): void {
+    if (this.stopped) throw new Error("This account is no longer active.");
+  }
+
+  private async readSource(box: MailboxKey, page?: string): Promise<ImboxResult> {
+    this.assertRunning();
+    try {
+      const result = await profileRequest.run(this.context, () => listMailbox(box, this.context.env, { paginated: true, singlePage: true, ...(page ? { page } : {}) }));
+      this.assertRunning();
+      if (result.status !== "ready") throw new Error("Mailbox unavailable.");
+      return result;
+    } catch {
+      this.assertRunning();
+      throw new Error("Could not check all six mailboxes. Refresh and try again.");
+    }
+  }
+
+  stop(): void { this.stopped = true; clearTimeout(this.timer); this.cursors.clear(); this.store.stop(); }
 }

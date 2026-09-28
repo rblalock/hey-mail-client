@@ -3,8 +3,12 @@ import type { ImboxPosting, ImboxResult, MailboxKey } from "../../shared/contrac
 export type SectionedMailboxes = Partial<Record<MailboxKey, ImboxResult>>;
 export type ImboxSectionKey = "active" | "replyLater" | "setAside" | "bubbledUp" | "previouslySeen";
 export type SectionedImbox = Record<ImboxSectionKey, ImboxPosting[]>;
+export type AccountSplitSectionKey = ImboxSectionKey | "feed" | "paperTrail" | "scheduledBubbleUp";
+export type AccountSplitMailboxes = Record<AccountSplitSectionKey, ImboxPosting[]>;
 
 export const IMBOX_SECTION_ORDER: ImboxSectionKey[] = ["active", "replyLater", "setAside", "bubbledUp", "previouslySeen"];
+export const ACCOUNT_SPLIT_SECTION_ORDER: AccountSplitSectionKey[] = ["active", "replyLater", "setAside", "bubbledUp", "feed", "paperTrail", "scheduledBubbleUp", "previouslySeen"];
+export const SECTION_MAILBOX: Record<AccountSplitSectionKey, MailboxKey> = { active: "imbox", replyLater: "laterbox", setAside: "asidebox", bubbledUp: "imbox", previouslySeen: "imbox", feed: "feedbox", paperTrail: "trailbox", scheduledBubbleUp: "bubblebox" };
 export const PREVIOUSLY_SEEN_BATCH = 25;
 
 function topicKey(posting: ImboxPosting): string {
@@ -35,19 +39,46 @@ export function groupSectionedImbox(mailboxes: SectionedMailboxes, retainedActiv
   return sections;
 }
 
+/** An account split keeps each source's workflow; a scheduled reminder is not due. */
+export function groupAccountSplitMailboxes(mailboxes: SectionedMailboxes, retainedActiveId?: string): AccountSplitMailboxes {
+  const imbox = groupSectionedImbox(mailboxes, retainedActiveId);
+  const sections: AccountSplitMailboxes = { active: [], replyLater: [], setAside: [], bubbledUp: [], previouslySeen: [], feed: [], paperTrail: [], scheduledBubbleUp: [] };
+  const topics = new Set<string>();
+  const ids = new Set<string>();
+  const add = (section: AccountSplitSectionKey, rows: ImboxPosting[]) => {
+    for (const posting of rows) {
+      const key = topicKey(posting);
+      if (topics.has(key) || ids.has(posting.id)) continue;
+      topics.add(key);
+      ids.add(posting.id);
+      sections[section].push(posting);
+    }
+  };
+  const rows = (box: MailboxKey) => mailboxes[box]?.status === "ready" ? mailboxes[box].postings : [];
+  add("replyLater", imbox.replyLater);
+  add("setAside", imbox.setAside);
+  add("scheduledBubbleUp", rows("bubblebox"));
+  for (const key of ["bubbledUp", "active", "previouslySeen"] as const) add(key, imbox[key]);
+  add("feed", rows("feedbox"));
+  add("paperTrail", rows("trailbox"));
+  return sections;
+}
+
 /** The physical mailbox of the winning row, used for read and membership actions. */
-export function sectionedPostingSource(mailboxes: SectionedMailboxes, posting: ImboxPosting): MailboxKey {
-  for (const box of ["laterbox", "asidebox", "imbox"] as const) {
+export function sectionedPostingSource(mailboxes: SectionedMailboxes, posting: ImboxPosting, accountSplit = false): MailboxKey {
+  const sources: MailboxKey[] = accountSplit ? ["laterbox", "asidebox", "bubblebox", "imbox", "feedbox", "trailbox"] : ["laterbox", "asidebox", "imbox"];
+  for (const box of sources) {
     if (mailboxes[box]?.status === "ready" && mailboxes[box].postings.some((candidate) => candidate.id === posting.id || topicKey(candidate) === topicKey(posting))) return box;
   }
   return "imbox";
 }
 
 /** Mixed selections add to a saved section; only a complete shared membership toggles off. */
-export function sectionedSelectionSource(mailboxes: SectionedMailboxes, postingIds: string[]): MailboxKey {
+export function sectionedSelectionSource(mailboxes: SectionedMailboxes, postingIds: string[], accountSplit = false): MailboxKey {
   if (!postingIds.length) return "imbox";
-  const groups = groupSectionedImbox(mailboxes);
-  const sources = new Map<string, MailboxKey>(IMBOX_SECTION_ORDER.flatMap((key) => groups[key].map((posting) => [posting.id, key === "replyLater" ? "laterbox" : key === "setAside" ? "asidebox" : "imbox"] as [string, MailboxKey])));
+  const groups = accountSplit ? groupAccountSplitMailboxes(mailboxes) : { ...groupSectionedImbox(mailboxes), feed: [], paperTrail: [], scheduledBubbleUp: [] };
+  const order = accountSplit ? ACCOUNT_SPLIT_SECTION_ORDER : IMBOX_SECTION_ORDER;
+  const sources = new Map<string, MailboxKey>(order.flatMap((key) => groups[key].map((posting) => [posting.id, SECTION_MAILBOX[key]] as [string, MailboxKey])));
   const first = sources.get(postingIds[0]!);
   return first && postingIds.every((id) => sources.get(id) === first) ? first : "imbox";
 }

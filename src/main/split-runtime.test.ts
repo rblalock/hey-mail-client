@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HeyAccountScope } from "../../resources/hey-account-scope.mjs";
 import type { ImboxPosting, ImboxResult, MailboxKey } from "../shared/contracts";
+import { SPLIT_MAILBOXES } from "../shared/mail-splits";
 import { listLibrary, listLibraryThreads, listMailbox, updateMailOrganization } from "./hey";
 import { profileRequest } from "./profile-process";
 import { createSplitLabel } from "./split-label";
@@ -52,7 +53,7 @@ afterEach(async () => {
 });
 
 describe("split runtime snapshots", () => {
-  it("reads only workflow boxes and captures account and environment for reads and writes", async () => {
+  it("reads six bounded source heads and captures account and environment for reads and writes", async () => {
     const { runtime, context, runWrite } = await fixture();
     const seenContexts: unknown[] = [];
     vi.mocked(listMailbox).mockImplementation(async (name, env) => {
@@ -67,14 +68,14 @@ describe("split runtime snapshots", () => {
     });
     const other = { scope: new HeyAccountScope("8", "https://app.hey.com"), env: { PATH: "/other/bin" } };
     await profileRequest.run(other, () => runtime.refresh());
-    expect(seenContexts).toEqual([context, context, context]);
-    expect(vi.mocked(listMailbox).mock.calls.map(([name]) => name)).toEqual(["imbox", "laterbox", "asidebox"]);
-    expect(vi.mocked(listMailbox).mock.calls[0]?.[2]).toEqual({ paginated: true });
+    expect(seenContexts).toEqual(SPLIT_MAILBOXES.map(() => context));
+    expect(vi.mocked(listMailbox).mock.calls.map(([name]) => name)).toEqual(SPLIT_MAILBOXES);
+    expect(vi.mocked(listMailbox).mock.calls.every((call) => call[2]?.paginated && call[2]?.singlePage)).toBe(true);
     expect(runWrite).toHaveBeenCalledTimes(1);
     expect((await runtime.get()).ownEmail).toBe("me@company.com");
   });
 
-  it("does not label a partial snapshot before all three boxes have loaded", async () => {
+  it("does not label a partial snapshot before all six boxes have loaded", async () => {
     const thirdStarted = deferred<void>();
     const third = deferred<ImboxResult>();
     const { runtime } = await fixture();
@@ -143,7 +144,7 @@ describe("split runtime snapshots", () => {
     const two = runtime.refresh(true);
     first.resolve(box("imbox", [row()]));
     await Promise.all([one, two]);
-    expect(listMailbox).toHaveBeenCalledTimes(3);
+    expect(listMailbox).toHaveBeenCalledTimes(6);
     expect(updateMailOrganization).toHaveBeenCalledTimes(1);
   });
 
@@ -161,20 +162,19 @@ describe("split runtime snapshots", () => {
     runtime.schedule();
     first.resolve(box("imbox", [row()]));
     await refresh;
-    expect(listMailbox).toHaveBeenCalledTimes(6);
+    expect(listMailbox).toHaveBeenCalledTimes(12);
     expect(updateMailOrganization).not.toHaveBeenCalled();
     expect((await runtime.store.preview(draft)).count).toBe(0);
   });
 
-  it("ignores Feed/Paper Trail observations while accepting workflow mailbox pages", async () => {
+  it("accepts Feed, Paper Trail, and scheduled Bubble Up observations", async () => {
     const { runtime } = await fixture();
     runtime.observe("feedbox", box("feedbox", [row()]));
-    runtime.observe("trailbox", box("trailbox", [row()]));
-    await runtime.store.idle();
-    expect(updateMailOrganization).not.toHaveBeenCalled();
-    runtime.observe("imbox", box("imbox", [row()]));
+    runtime.observe("trailbox", box("trailbox", [row("11")]));
+    runtime.observe("bubblebox", box("bubblebox", [row("12")]));
     await runtime.store.idle();
     expect(updateMailOrganization).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(updateMailOrganization).mock.calls[0]?.[0].postingIds).toEqual(["10", "11", "12"]);
   });
 
   it("does not scan with no enabled splits unless explicitly requested", async () => {
@@ -182,7 +182,7 @@ describe("split runtime snapshots", () => {
     await runtime.refresh();
     expect(listMailbox).not.toHaveBeenCalled();
     await runtime.refresh(true);
-    expect(listMailbox).toHaveBeenCalledTimes(3);
+    expect(listMailbox).toHaveBeenCalledTimes(6);
     expect(updateMailOrganization).not.toHaveBeenCalled();
   });
 
@@ -201,5 +201,87 @@ describe("split runtime snapshots", () => {
     expect(updateMailOrganization).not.toHaveBeenCalled();
     expect(onChange).toHaveBeenCalledTimes(notifications);
     await expect(runtime.preview(draft)).rejects.toThrow("no longer active");
+  });
+});
+
+describe("account-wide split pages", () => {
+  it("finds rule or linked-label members in their real sources, excluding outside-label-only rows", async () => {
+    const { runtime, context } = await fixture(false);
+    const manual = row("21", "manual@elsewhere.com");
+    const outside = row("22", "outside@elsewhere.com");
+    vi.mocked(listLibraryThreads).mockResolvedValue({ kind: "labels", id: "31", title: "Team", postings: [manual, outside] });
+    const saved = await runtime.store.save({ ...draft, enabled: false });
+    vi.mocked(listMailbox).mockImplementation(async (name) => {
+      expect(profileRequest.getStore()).toBe(context);
+      return box(name, name === "feedbox" ? [row("20"), manual] : name === "bubblebox" ? [row("23")] : []);
+    });
+    const result = await runtime.listMail(saved.splits[0]!.id);
+    expect(Object.keys(result.mailboxes)).toEqual(SPLIT_MAILBOXES);
+    expect(result.mailboxes.feedbox?.postings.map((item) => item.id)).toEqual(["20", "21"]);
+    expect(result.mailboxes.bubblebox?.postings.map((item) => item.id)).toEqual(["23"]);
+    expect(Object.values(result.mailboxes).flatMap((source) => source.postings).some((item) => item.id === "22")).toBe(false);
+    expect(result.nextPage).toBeUndefined();
+    expect(updateMailOrganization).not.toHaveBeenCalled();
+  });
+
+  it("carries empty match pages forward and bounds each continuation to six source reads", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    vi.mocked(listMailbox).mockImplementation(async (name, _env, options) => {
+      const page = Number(options?.page ?? "0");
+      return { ...box(name, name === "trailbox" && page === 2 ? [row("55")] : [row("56", "other@example.com")]), ...(page < 3 ? { nextPage: String(page + 1) } : {}) };
+    });
+    const head = await runtime.listMail(id);
+    expect(Object.values(head.mailboxes).flatMap((source) => source.postings)).toEqual([]);
+    expect(head.nextPage).toBeTruthy();
+    expect(listMailbox).toHaveBeenCalledTimes(6);
+    const older = await runtime.listMail(id, head.nextPage);
+    expect(older.nextPage).toBeTruthy();
+    expect(listMailbox).toHaveBeenCalledTimes(12);
+    const match = await runtime.listMail(id, older.nextPage);
+    expect(match.mailboxes.trailbox?.postings.map((item) => item.id)).toEqual(["55"]);
+    expect(listMailbox).toHaveBeenCalledTimes(18);
+    await runtime.store.idle();
+    expect(listLibraryThreads).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects cursors after split edits and across runtime/profile contexts", async () => {
+    const { runtime } = await fixture();
+    const split = (await runtime.get()).splits[0]!;
+    vi.mocked(listMailbox).mockImplementation(async (name) => ({ ...box(name), nextPage: "older" }));
+    const head = await runtime.listMail(split.id);
+    await runtime.store.save({ ...split, domains: ["changed.com"] });
+    vi.mocked(listMailbox).mockClear();
+    await expect(runtime.listMail(split.id, head.nextPage)).rejects.toThrow("changed or its page expired");
+    expect(listMailbox).not.toHaveBeenCalled();
+    const other = await fixture();
+    const otherSplit = (await other.runtime.get()).splits[0]!;
+    await expect(other.runtime.listMail(otherSplit.id, head.nextPage)).rejects.toThrow("expired");
+  });
+
+  it("fails source errors explicitly and prevents cursor loops", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    vi.mocked(listMailbox).mockImplementation(async (name) => name === "trailbox" ? { ...box(name), status: "unavailable", detail: "private data" } : box(name));
+    await expect(runtime.listMail(id)).rejects.toThrow("Could not check all six");
+    expect(updateMailOrganization).not.toHaveBeenCalled();
+    vi.mocked(listMailbox).mockImplementation(async (name) => ({ ...box(name), nextPage: "same" }));
+    const head = await runtime.listMail(id);
+    await expect(runtime.listMail(id, head.nextPage)).rejects.toThrow("stopped making progress");
+  });
+
+  it("stops listing after account deactivation during a source read", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    const entered = deferred<void>();
+    const first = deferred<ImboxResult>();
+    vi.mocked(listMailbox).mockImplementation(async () => { entered.resolve(); return first.promise; });
+    const listing = runtime.listMail(id);
+    await entered.promise;
+    runtime.stop();
+    first.resolve(box("imbox", [row()]));
+    await expect(listing).rejects.toThrow("no longer active");
+    expect(listMailbox).toHaveBeenCalledTimes(1);
+    expect(updateMailOrganization).not.toHaveBeenCalled();
   });
 });

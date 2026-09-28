@@ -25,6 +25,34 @@ function update(cache: MailboxCache, request: MailMutationRequest, cursor = "2")
 }
 
 describe("optimistic mail mutations", () => {
+  it.each(["feedbox", "trailbox", "bubblebox"] as const)("completes %s mail in place and restores its read state without moving or reordering it", (sourceBox) => {
+    const rows = [posting("1", true), posting("2", false), posting("3", false)];
+    const cache = { [sourceBox]: mailbox(sourceBox, rows), imbox: mailbox("imbox", [posting("4", false)]) };
+    const request: MailMutationRequest = { operation: "done", postingIds: ["2"], completion: [{ id: "2", sourceBox, seen: false, bubbledUp: false }] };
+    const result = applyOptimisticMailMutation(cache, sourceBox, "2", request);
+    expect(result.mailboxes[sourceBox]?.postings.map((row) => [row.id, row.seen])).toEqual([["1", true], ["2", true], ["3", false]]);
+    expect(result.mailboxes.imbox?.postings).toEqual(cache.imbox.postings);
+    expect(result.removedFromActiveMailbox).toBe(false);
+    expect(rows[1]?.seen).toBe(false);
+    const undo = applyOptimisticMailMutation(result.mailboxes, sourceBox, "2", { ...request, operation: "undo-done" });
+    expect(undo.mailboxes[sourceBox]?.postings).toEqual(rows.map((row) => row.id === "2" ? { ...row, bubbledUp: false, boxGroupId: undefined } : row));
+    expect(undo.mailboxes.imbox?.postings).toEqual(cache.imbox.postings);
+  });
+
+  it("completes mixed source selections without moving Feed, Paper Trail, or scheduled reminders into Imbox", () => {
+    const sources = ["imbox", "laterbox", "asidebox", "feedbox", "trailbox", "bubblebox"] as const;
+    const cache = Object.fromEntries(sources.map((source, index) => [source, mailbox(source, [posting(String(index + 1), false)])]));
+    const completion = sources.map((sourceBox, index) => ({ id: String(index + 1), sourceBox, seen: false, bubbledUp: false }));
+    const request: MailMutationRequest = { operation: "done", postingIds: completion.map((state) => state.id), completion };
+    const done = update(cache, request).mailboxes;
+    expect(done.imbox?.postings.map((row) => row.id)).toEqual(["3", "2", "1"]);
+    expect(done.laterbox?.postings).toEqual([]);
+    expect(done.asidebox?.postings).toEqual([]);
+    for (const [source, id] of [["feedbox", "4"], ["trailbox", "5"], ["bubblebox", "6"]] as const) expect(done[source]?.postings).toMatchObject([{ id, seen: true }]);
+    const restored = update(done, { ...request, operation: "undo-done" }).mailboxes;
+    for (const [index, source] of sources.entries()) expect(restored[source]?.postings).toMatchObject([{ id: String(index + 1), seen: false }]);
+  });
+
   it("finishes kept and resurfaced conversations once, then restores their original state", () => {
     const aside = { ...posting("1", false), boxGroupId: "42" };
     const due = { ...posting("2", true), bubbledUp: true };

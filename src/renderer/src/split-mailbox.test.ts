@@ -84,6 +84,24 @@ describe("split mailbox views", () => {
     expect(splitPendingCounts(mailboxes, state())).toEqual({ all: 0, vip: 0, team: 0, remaining: 0 });
   });
 
+  it("filters all six sources for an account split without changing ordinary Imbox filtering", () => {
+    const mailboxes = {
+      imbox: box("imbox", [row("1")]),
+      feedbox: box("feedbox", [row("2"), row("3", "news@outside.test")], { nextPage: "feed-next" }),
+      trailbox: box("trailbox", [row("4"), row("5", "receipt@outside.test")]),
+      bubblebox: box("bubblebox", [row("6"), row("7", "reminder@outside.test")]),
+      laterbox: box("laterbox", [row("8")]),
+      asidebox: box("asidebox", [row("9")]),
+    };
+    const filtered = filterSplitMailboxes(mailboxes, state(), "team", true);
+    expect(Object.fromEntries(Object.entries(filtered).map(([key, result]) => [key, result?.postings.map((posting) => posting.id)]))).toEqual({
+      imbox: ["1"], feedbox: ["2"], trailbox: ["4"], bubblebox: ["6"], laterbox: ["8"], asidebox: ["9"],
+    });
+    expect(filtered.feedbox?.nextPage).toBe("feed-next");
+    expect(mailboxes.feedbox.postings).toHaveLength(2);
+    expect(filterSplitMailboxes(mailboxes, state(), "team").feedbox).toBe(mailboxes.feedbox);
+  });
+
   it("preserves pagination and availability even when the current page has no matches", () => {
     const mailboxes = { imbox: box("imbox", [row("1", "outside@example.test")], { nextPage: "older-cursor" }), laterbox: undefined };
     const filtered = filterSplitMailboxes(mailboxes, state(), "team");
@@ -114,6 +132,17 @@ describe("split mailbox views", () => {
 });
 
 describe("split pending counts", () => {
+  it("counts loaded account work while keeping seen Feed/Trail history and ordinary All quiet", () => {
+    const mailboxes = {
+      imbox: box("imbox", [row("1"), row("2", undefined, { seen: true })]),
+      feedbox: box("feedbox", [row("3"), row("4", undefined, { seen: true })], { nextPage: "feed-next" }),
+      trailbox: box("trailbox", [row("5"), row("6", undefined, { seen: true })]),
+      bubblebox: box("bubblebox", [row("7", undefined, { seen: true }), row("8", "outside@example.test")]),
+      laterbox: box("laterbox", [row("9", undefined, { seen: true })]),
+      asidebox: box("asidebox", [row("10", undefined, { seen: true })]),
+    };
+    expect(splitPendingCounts(mailboxes, state(), true)).toEqual({ all: 3, vip: 6, team: 6, remaining: 1 });
+  });
   it("counts all outstanding sections, not Previously Seen or just unread rows", () => {
     const mailboxes = {
       imbox: box("imbox", [row("1"), row("2", undefined, { seen: true }), row("3", undefined, { seen: true, bubbledUp: true }), row("4", "alex@company.test"), row("5", "outside@example.test")]),

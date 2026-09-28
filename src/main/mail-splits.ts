@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ImboxPosting } from "../shared/contracts";
-import { isHeyId, isMailSplitId, matchesMailSplit, MAX_MAIL_SPLITS, normalizeMailSplitDraft, splitTopicId, type MailSplit, type MailSplitPreview, type MailSplitState } from "../shared/mail-splits";
+import { isHeyId, isMailSplitId, matchesMailSplit, MAX_MAIL_SPLITS, normalizeAddToSplit, normalizeMailSplitDraft, splitTopicId, type MailSplit, type MailSplitPreview, type MailSplitState } from "../shared/mail-splits";
 
 export type MailSplitDependencies = {
   /** All dependencies must close over one immutable account/profile context. */
@@ -107,6 +107,134 @@ export class MailSplits {
     return this.snapshot();
   }
 
+  /** Loads an existing link once; listing does not enqueue rule writes. */
+  async listingState(id: string): Promise<MailSplitState> {
+    if (!isMailSplitId(id)) throw new Error("Choose a valid split.");
+    await this.ready;
+    await this.enqueue(async () => {
+      await this.configQueue;
+      this.assertRunning();
+      const split = this.splits.find((item) => item.id === id);
+      if (!split) throw new Error("This split no longer exists.");
+      if (split.labelId && !this.labels.has(split.labelId)) {
+        let membership: Membership;
+        try { membership = await this.readMembership(split.labelId); }
+        catch { throw new Error("Could not load this split's linked label. Refresh and check its HEY label before continuing."); }
+        this.assertRunning();
+        if (this.splits.find((item) => item.id === id)?.labelId !== split.labelId) throw new Error("This split changed. Refresh to continue.");
+        this.labels.set(split.labelId, membership);
+        this.emit();
+      }
+    });
+    return this.snapshot();
+  }
+
+  /** Explicit manual filing also works for paused splits; future rules are additive. */
+  async addToSplit(value: unknown): Promise<MailSplitState> {
+    const request = normalizeAddToSplit(value);
+    await this.ready;
+    await this.enqueue(async () => {
+      await this.configQueue;
+      this.assertRunning();
+      let split = this.splits.find((item) => item.id === request.splitId);
+      if (!split) throw new Error("This split no longer exists.");
+      const revision = this.revisions.get(split.id) ?? 0;
+      // Validate the combined rule limits before any external mutation.
+      const merged = normalizeMailSplitDraft({ ...split,
+        people: [...new Set([...split.people, ...(request.people ?? [])])],
+        domains: [...new Set([...split.domains, ...(request.domains ?? [])])],
+      });
+      const check = () => {
+        const current = this.current(request.splitId, revision);
+        if (!current) throw new Error("Split settings changed. Refresh before continuing.");
+        return current;
+      };
+      let labelId = split.labelId;
+      const createdPostings = new Set<string>();
+      try {
+        let membership = labelId ? this.labels.get(labelId) : undefined;
+        if (!labelId) {
+          const matches = (await this.dependencies.listLabels()).filter((item) => item.name.toLowerCase() === split!.labelName.toLowerCase());
+          check();
+          if (matches.length > 1) throw new Error("Split label name is ambiguous. Choose the existing label explicitly.");
+          let label = matches[0] ?? this.pendingLabels.get(split.id);
+          if (!label) {
+            if (this.creationIntents[split.id] === split.labelName) throw new Error("Split label creation could not be confirmed. Choose its existing HEY label in split settings before retrying.");
+            await this.configure(async () => {
+              const current = check();
+              this.creationIntents[current.id] = current.labelName;
+              await this.persistIntents();
+            });
+            check();
+            const firstBatch = request.postingIds.slice(0, BATCH_SIZE);
+            label = await this.dependencies.createLabel(split.labelName, firstBatch);
+            firstBatch.forEach((id) => createdPostings.add(id));
+          }
+          if (!isHeyId(label.id)) throw new Error("Split label returned an invalid ID. Choose the label in split settings.");
+          labelId = label.id;
+          this.pendingLabels.set(split.id, label);
+          const linked = label;
+          await this.configure(async () => {
+            const current = check();
+            const next = this.splits.map((item) => item.id === current.id ? { ...item, labelId: linked.id, labelName: linked.name } : item);
+            await this.persist(next);
+            this.splits = next;
+            this.pendingLabels.delete(current.id);
+            delete this.creationIntents[current.id];
+            await this.persistIntents();
+            this.emit();
+          });
+          split = check();
+        }
+        if (!membership) {
+          membership = await this.readMembership(labelId);
+          check();
+          this.labels.set(labelId, membership);
+        }
+        const missing = request.postingIds.filter((id) => !membership!.postings.has(id) && !createdPostings.has(id));
+        for (let index = 0; index < missing.length; index += BATCH_SIZE) {
+          check();
+          const ids = missing.slice(index, index + BATCH_SIZE);
+          await this.dependencies.addLabel(labelId, ids);
+          for (const id of ids) {
+            membership.postings.add(id);
+            const posting = this.observed.get(id);
+            if (posting) membership.topics.add(splitTopicId(posting));
+          }
+        }
+        // Source rows may come from search or a library, so resolve authoritative
+        // topic IDs instead of assuming selected posting IDs are conversation IDs.
+        const confirmed = await this.readMembership(labelId);
+        check();
+        this.labels.set(labelId, confirmed);
+        if (request.postingIds.some((id) => !confirmed.postings.has(id))) throw new Error("Split labeling could not be confirmed. Refresh before retrying.");
+        await this.configure(async () => {
+          const current = check();
+          const next = this.splits.map((item) => item.id === current.id ? { ...item, people: merged.people, domains: merged.domains } : item);
+          await this.persist(next);
+          this.splits = next;
+          this.revisions.set(current.id, revision + 1);
+          this.retryAfter.delete(current.id);
+          delete this.errors[current.id];
+          this.emit();
+        });
+      } catch (cause) {
+        // A failed batch may have committed. Read back before any subsequent retry;
+        // never repeat an unconfirmed create or save broader rules on partial success.
+        if (labelId) {
+          this.labels.delete(labelId);
+          try { this.labels.set(labelId, await this.readMembership(labelId)); } catch { /* Retry must reload membership. */ }
+        }
+        const error = new Error(cause instanceof Error && cause.message.startsWith("Split ") ? cause.message
+          : "Split add could not be completed. Some conversations may already have been added. Refresh and check the linked label before retrying.");
+        this.fail(request.splitId, error);
+        throw error;
+      }
+    });
+    this.scheduleSync();
+    return this.snapshot();
+  }
+
   async preview(value: unknown, postings?: readonly ImboxPosting[]): Promise<MailSplitPreview> {
     const draft = normalizeMailSplitDraft(value);
     await this.ready;
@@ -116,7 +244,7 @@ export class MailSplits {
     for (const posting of postings ?? this.observed.values()) {
       const topic = splitTopicId(posting);
       topics.add(topic);
-      if (matchedTopics.has(topic) || !matchesMailSplit(posting, draft, this.dependencies.ownEmail)) continue;
+      if (matchedTopics.has(topic) || !matchesMailSplit(posting, draft, this.dependencies.ownEmail) && !this.labels.get(draft.labelId ?? "")?.topics.has(topic)) continue;
       matchedTopics.add(topic);
       matches.push(posting);
     }
@@ -124,11 +252,11 @@ export class MailSplits {
       count: matches.length,
       scannedCount: topics.size,
       samples: matches.slice(0, 8),
-      scope: `Matches among ${topics.size} conversations currently loaded from Imbox, Reply Later, and Set Aside. Older mail is checked as it loads.`,
+      scope: `Matches among ${topics.size} conversations currently loaded from Imbox, Feed, Paper Trail, Set Aside, Reply Later, and Bubble Up. Older mail is checked as it loads.`,
     });
   }
 
-  /** Only pass Imbox, Reply Later, or Set Aside rows. Feed/Paper Trail are separate. */
+  /** Observe any of the six supported mailboxes, excluding Trash, Spam, and Screener. */
   async observe(postings: ImboxPosting[]): Promise<void> {
     await this.ready;
     if (this.stopped) return;

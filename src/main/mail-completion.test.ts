@@ -11,6 +11,14 @@ const original: MailCompletionState[] = [
 const request = (completion = original): MailMutationRequest => ({ operation: "done", postingIds: completion.map((state) => state.id), completion });
 
 describe("Done workflow", () => {
+  it.each(["feedbox", "trailbox", "bubblebox"] as const)("marks %s done in place and restores only its read state on Undo", async (sourceBox) => {
+    const run = vi.fn(async (_args: string[]) => {});
+    const done = await completeMail(request([{ id: "21", sourceBox, seen: false, bubbledUp: false }]), run);
+    expect(run.mock.calls.map(([args]) => args)).toEqual([["seen", "21", "--json"]]);
+    run.mockClear();
+    await completeMail(done.undo!, run);
+    expect(run.mock.calls.map(([args]) => args)).toEqual([["unseen", "21", "--json"]]);
+  });
   it("marks original posting IDs read, removes due bubbles, and brings kept conversations to Imbox", async () => {
     const run = vi.fn(async (_args: string[]) => {});
     const result = await completeMail(request(), run);

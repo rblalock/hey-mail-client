@@ -75,6 +75,15 @@
 .split-manager-empty { padding: 32px 0; }
 .split-manager-empty > p { margin-top: 7px; }
 .split-manager .split-notice { margin-top: 14px; }
+.split-add-dialog { width: min(560px, calc(100vw - 24px)); }
+.split-add-fields { margin-top: 20px; }
+.split-add-options { display: flex; flex-direction: column; gap: 14px; padding: 0; border: 0; min-width: 0; }
+.split-add-options legend { margin-bottom: 12px; color: var(--ink); font-weight: 550; }
+.split-add-options label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.split-add-options input { flex: none; margin-top: 4px; accent-color: var(--accent); }
+.split-add-options span { min-width: 0; }
+.split-add-options small { display: block; color: var(--ink-2); font-size: var(--type-meta); overflow-wrap: anywhere; margin-top: 3px; }
+.split-add-create { margin-top: 20px !important; }
 .split-remove-confirm { margin-top: 10px; padding: 12px; border-radius: 7px; background: var(--field); }
 .split-remove-confirm > div { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .split-manager .split-remove-action { color: var(--red); }

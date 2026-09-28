@@ -123,18 +123,18 @@ const SCREENER_DESTINATIONS = new Set<MailboxKey>(["imbox", "feedbox", "trailbox
 export function mailboxListOptions(value: unknown): MailboxListOptions {
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid HEY mailbox options.");
-  const { page, paginated } = value as MailboxListOptions;
+  const { page, paginated, singlePage } = value as MailboxListOptions;
   if (paginated !== undefined && typeof paginated !== "boolean") throw new Error("Invalid HEY mailbox pagination.");
   // Match library cursor support: opaque values, including next_history_url, are CLI arguments.
   if (page !== undefined && (typeof page !== "string" || !page.trim() || page.length > 4096 || /[\x00-\x1f\x7f]/.test(page))) throw new Error("Invalid HEY mailbox page.");
   if (page !== undefined && paginated !== true) throw new Error("A mailbox page requires pagination.");
-  return { ...(page === undefined ? {} : { page }), ...(paginated === undefined ? {} : { paginated }) };
+  if (singlePage !== undefined && (typeof singlePage !== "boolean" || paginated !== true)) throw new Error("A single mailbox page requires pagination.");
+  return { ...(page === undefined ? {} : { page }), ...(paginated === undefined ? {} : { paginated }), ...(singlePage === undefined ? {} : { singlePage }) };
 }
 
 export function mailboxCommand(box: MailboxKey, options?: MailboxListOptions): string[] {
   if (!MAILBOXES.has(box)) throw new Error("Invalid HEY mailbox.");
   const { page, paginated } = mailboxListOptions(options);
-  if (paginated && box !== "imbox") throw new Error("Mailbox pagination is available for the Imbox.");
   const source = box === "asidebox" ? ["set-aside", "view"] : ["box", "view", box];
   return [...source, ...(paginated ? page === undefined ? [] : ["--page", page] : ["--all"]), "--json"];
 }
@@ -158,7 +158,7 @@ export async function listMailbox(box: MailboxKey, env: NodeJS.ProcessEnv = proc
       return parseImboxJson(stdout, box);
     };
     let result = await readPage(args);
-    if (box !== "imbox" || !options?.paginated || options.page !== undefined) return result;
+    if (box !== "imbox" || !options?.paginated || options.singlePage || options.page !== undefined) return result;
 
     // HEY CLI 1.7's bubble_list.go reads the bubbled-up prefix of Imbox; mail/page.go
     // documents seen postings ordered last. Read through that active prefix, which

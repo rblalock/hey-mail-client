@@ -1,6 +1,6 @@
 import type { MailCompletionState, MailMutationRequest, MailMutationResult } from "../shared/contracts";
 
-const COMPLETION_BOXES = new Set(["imbox", "laterbox", "asidebox"]);
+const COMPLETION_BOXES = new Set(["imbox", "laterbox", "asidebox", "feedbox", "trailbox", "bubblebox"]);
 const validId = (id: unknown): id is string => typeof id === "string" && /^[1-9]\d{0,18}$/.test(id) && BigInt(id) <= 9223372036854775807n;
 
 /** Completion snapshots always describe the state before Done, including for Undo. */
@@ -85,14 +85,15 @@ async function restoreGroups(states: MailCompletionState[], run: CompletionRunne
 
 function completionSteps(state: MailCompletionState, undo: boolean): CompletionStep[] {
   const steps: CompletionStep[] = [];
+  const returnsToImbox = state.sourceBox === "laterbox" || state.sourceBox === "asidebox";
   if (undo) {
-    if (state.sourceBox !== "imbox") steps.push({ command: command("move", state.id, "--to", state.sourceBox), compensate: command("move", state.id, "--to", "imbox") });
+    if (returnsToImbox) steps.push({ command: command("move", state.id, "--to", state.sourceBox), compensate: command("move", state.id, "--to", "imbox") });
     if (state.bubbledUp) steps.push({ command: command("bubble", "up", state.id, "--now"), compensate: command("bubble", "pop", state.id) });
     // Bubble Up can affect read state, so restore read state after restoring the bubble.
     steps.push({ command: command(state.seen ? "seen" : "unseen", state.id), compensate: command("seen", state.id) });
   } else {
     if (state.bubbledUp) steps.push({ command: command("bubble", "pop", state.id), compensate: command("bubble", "up", state.id, "--now") });
-    if (state.sourceBox !== "imbox") steps.push({ command: command("move", state.id, "--to", "imbox"), compensate: command("move", state.id, "--to", state.sourceBox) });
+    if (returnsToImbox) steps.push({ command: command("move", state.id, "--to", "imbox"), compensate: command("move", state.id, "--to", state.sourceBox) });
     steps.push({ command: command("seen", state.id), compensate: command(state.seen ? "seen" : "unseen", state.id) });
   }
   return steps;

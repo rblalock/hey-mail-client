@@ -17,6 +17,8 @@ const api: HeyAgentApi = {
     removeSplit: (id) => invoke("mail:remove-split", id),
     previewSplit: (draft) => invoke("mail:preview-split", draft),
     refreshSplits: () => invoke("mail:refresh-splits"),
+    listSplitMail: (id, page) => invoke("mail:list-split-mail", id, page),
+    addToSplit: (request) => invoke("mail:add-to-split", request),
     subscribeSplits: (listener) => {
       const handler = (_event: Electron.IpcRendererEvent, state: Parameters<typeof listener>[0]) => listener(state);
       ipcRenderer.on("mail:splits-changed", handler);

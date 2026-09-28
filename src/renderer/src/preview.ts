@@ -3,7 +3,7 @@ import { DEFAULT_ENABLED_HELPERS, HELPER_CATALOG_VERSION, helperById, isCustomHe
 import { addDays, eventOccursOn } from "./calendar";
 import { DeferredTrash } from "../../shared/deferred-trash";
 import { validateCustomShortcuts } from "../../shared/shortcuts";
-import { MAX_MAIL_SPLITS, matchesMailSplit, normalizeMailSplitDraft, splitTopicId, type MailSplit, type MailSplitState } from "../../shared/mail-splits";
+import { MAX_MAIL_SPLITS, isMailSplitId, matchesMailSplit, normalizeAddToSplit, normalizeMailSplitDraft, SPLIT_MAILBOXES, splitContainsPosting, splitTopicId, type MailSplit, type MailSplitPage, type MailSplitState } from "../../shared/mail-splits";
 
 const now = Date.now();
 const minutesAgo = (minutes: number) => new Date(now - minutes * 60_000).toISOString();
@@ -158,13 +158,17 @@ function sectionedImboxFixture(splitInbox = false, ownEmail = "alex@example.com"
     const sam = { name: "Sam Rivera", email: "sam@example.com", initials: "SR" };
     const github = { name: "GitHub", email: "notifications@github.example", initials: "GH" };
     const outside = { name: "Northline Studio", email: "hello@northline.example", initials: "NS" };
+    const receipts = { name: "Workspace Receipts", email: "billing@receipts.example", initials: "WR" };
+    boxes.feedbox.push(posting(2601, "Team dispatch — a studio update"), posting(2602, "GitHub digest — repository activity", true));
+    boxes.trailbox.push(posting(2701, "Studio receipt — September workspace", true), posting(2702, "Workspace payment confirmation", true));
     for (const items of Object.values(boxes)) for (const item of items) {
       const row = Number(item.id);
       const historyIndex = row - 3000;
-      const sender = row === 2101 || row === 2201 || row === 2401 || row === 2501 ? maya
-        : row === 2102 || row === 2301 ? drew
+      const sender = row === 2101 || row === 2201 || row === 2401 || row === 2501 || row === 2601 ? maya
+        : row === 2102 || row === 2301 || row === 2701 ? drew
           : row === 2302 ? sam
-            : row === 2104 ? github
+            : row === 2104 || row === 2602 ? github
+              : row === 2702 ? receipts
               : historyIndex >= 50 && historyIndex < 100 ? historyIndex % 2 === 0 ? maya : drew
                 : historyIndex >= 100 && historyIndex < 115 ? github
                   : historyIndex >= 115 ? maya : outside;
@@ -198,13 +202,16 @@ function sectionedImboxFixture(splitInbox = false, ownEmail = "alex@example.com"
     mutations.push(structuredClone(request));
     const before: MailCompletionState[] = request.postingIds.flatMap((id) => {
       const found = find(id);
-      return found ? [{ id, sourceBox: found.box, seen: found.item.seen, bubbledUp: found.item.bubbledUp === true, ...(found.item.boxGroupId ? { boxGroupId: found.item.boxGroupId } : {}) }] : [];
+      return found ? [{ id, sourceBox: found.box, seen: found.item.seen, bubbledUp: found.box === "imbox" && found.item.bubbledUp === true, ...(found.box === "asidebox" && found.item.boxGroupId ? { boxGroupId: found.item.boxGroupId } : {}) }] : [];
     });
     for (const id of request.postingIds) {
       const found = find(id);
       if (!found) continue;
       const item = { ...found.item };
-      if (request.operation === "done") place({ ...item, seen: true, bubbledUp: false, boxGroupId: undefined }, "imbox");
+      if (request.operation === "done") {
+        const saved = found.box === "laterbox" || found.box === "asidebox";
+        place({ ...item, seen: true, ...(found.box === "imbox" ? { bubbledUp: false } : {}), ...(saved ? { boxGroupId: undefined } : {}) }, saved ? "imbox" : found.box);
+      }
       else if (request.operation === "undo-done") {
         const original = request.completion?.find((value) => value.id === id);
         if (original) place({ ...item, seen: original.seen, bubbledUp: original.bubbledUp, boxGroupId: original.boxGroupId }, original.sourceBox);
@@ -308,10 +315,11 @@ export function previewApi(): HeyAgentApi {
     }
   } catch { /* A damaged fictional fixture should not block previewing the app. */ }
   const splitListeners = new Set<(state: MailSplitState) => void>();
-  const splitRequests: Array<{ operation: string; splitId?: string }> = [];
+  const splitRequests: Array<{ operation: string; splitId?: string; page?: string }> = [];
+  const splitCursors = new Map<string, { splitId: string; definition: string; sources: Array<{ box: MailboxKey; page?: string }> }>();
   const splitMail = () => {
     const boxes = sectionedFixture?.snapshot();
-    return boxes ? [...boxes.imbox, ...boxes.laterbox, ...boxes.asidebox] : imboxPostings;
+    return boxes ? SPLIT_MAILBOXES.flatMap((box) => boxes[box]) : imboxPostings;
   };
   const splitState = (): MailSplitState => {
     const mail = splitMail();
@@ -454,9 +462,58 @@ export function previewApi(): HeyAgentApi {
         const mail = splitMail();
         const matches = mail.filter((posting) => matchesMailSplit(posting, draft, account.email));
         splitRequests.push({ operation: "preview", splitId: draft.id });
-        return { count: matches.length, scannedCount: mail.length, samples: structuredClone(matches.slice(0, 8)), scope: `Rule matches among ${mail.length} fictional Imbox, Reply Later, and Set Aside conversations. Existing label-only matches are not included.` };
+        return { count: matches.length, scannedCount: mail.length, samples: structuredClone(matches.slice(0, 8)), scope: `Rule matches among ${mail.length} fictional conversations across all six mailboxes. Existing label-only matches are not included.` };
       },
       refreshSplits: async () => { splitRequests.push({ operation: "refresh" }); return applySplitRules(); },
+      listSplitMail: async (id, page) => {
+        if (!isMailSplitId(id)) throw new Error("Choose a valid split.");
+        const state = splitState();
+        const split = state.splits.find((item) => item.id === id);
+        if (!split) throw new Error("This split no longer exists.");
+        const definition = JSON.stringify(split);
+        const saved = page ? splitCursors.get(page) : undefined;
+        if (page !== undefined && (!saved || saved.splitId !== id || saved.definition !== definition)) throw new Error("This split changed or its page expired. Refresh to continue.");
+        const sources = saved ? structuredClone(saved.sources) : SPLIT_MAILBOXES.map((box) => ({ box, page: undefined as string | undefined }));
+        const mailboxes: MailSplitPage["mailboxes"] = {};
+        // One bounded round across pending sources preserves empty continuation
+        // pages for testing the same cursor-driven UI used by the live adapter.
+        const sourceCount = Math.min(6, sources.length);
+        for (let index = 0; index < sourceCount; index += 1) {
+          const source = sources.shift()!;
+          const result = sectionedFixture?.list(source.box, { paginated: true, singlePage: true, ...(source.page ? { page: source.page } : {}) })
+            ?? { status: "ready" as const, boxKey: source.box, boxName: source.box, postings: source.box === "imbox" ? imboxPostings : [] };
+          const { nextPage, ...metadata } = result;
+          mailboxes[source.box] = { ...metadata, postings: result.postings.filter((posting) => splitContainsPosting(posting, split, state.memberships, state.ownEmail)) };
+          if (nextPage) sources.push({ box: source.box, page: nextPage });
+        }
+        splitRequests.push({ operation: "list", splitId: id, ...(page ? { page } : {}) });
+        const nextPage = sources.length ? crypto.randomUUID() : undefined;
+        if (nextPage) {
+          splitCursors.set(nextPage, { splitId: id, definition, sources });
+          while (splitCursors.size > 100) splitCursors.delete(splitCursors.keys().next().value!);
+        }
+        return structuredClone({ mailboxes, ...(nextPage ? { nextPage } : {}) });
+      },
+      addToSplit: async (value) => {
+        const request = normalizeAddToSplit(value);
+        const split = splits.find((item) => item.id === request.splitId);
+        if (!split) throw new Error("This split no longer exists.");
+        const merged = normalizeMailSplitDraft({ ...split, people: [...new Set([...split.people, ...(request.people ?? [])])], domains: [...new Set([...split.domains, ...(request.domains ?? [])])] });
+        const available = new Set(splitMail().map((posting) => posting.id));
+        if (request.postingIds.some((id) => !available.has(id))) throw new Error("A selected preview conversation is unavailable. Refresh and try again.");
+        const labels = previewOrganization.labels.filter((label) => split.labelId ? label.id === split.labelId : label.name.toLowerCase() === split.labelName.toLowerCase());
+        if (labels.length > 1) throw new Error("Split label name is ambiguous. Choose the existing label explicitly.");
+        if (split.labelId && !labels.length) throw new Error("That HEY label is unavailable in this account. Choose another label.");
+        let label = labels[0];
+        if (!label) {
+          label = { id: String(Math.max(700, ...previewOrganization.labels.map((item) => Number(item.id))) + 1), name: split.labelName, summary: "Created in preview", members: new Set<string>() };
+          previewOrganization.labels.push(label);
+        }
+        request.postingIds.forEach((id) => label.members.add(id));
+        splits = splits.map((item) => item.id === split.id ? { ...item, people: merged.people, domains: merged.domains, labelId: label.id, labelName: label.name } : item);
+        splitRequests.push({ operation: "add", splitId: split.id });
+        return applySplitRules();
+      },
       subscribeSplits: (listener) => { splitListeners.add(listener); return () => splitListeners.delete(listener); },
       listImbox: async () => sectionedFixture?.list("imbox") ?? ({ status: "ready", boxKey: "imbox", boxName: "Imbox", postings: imboxPostings }),
       listMailbox: async (box, options) => sectionedFixture?.list(box, options) ?? ({ status: "ready", boxKey: box, boxName: box === "imbox" ? "Imbox" : box === "asidebox" ? "Set Aside" : "Mailbox", postings: box === "asidebox" && previewSetAsideGroups ? setAsidePostings : imboxPostings }),

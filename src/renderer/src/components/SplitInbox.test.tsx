@@ -54,9 +54,11 @@ describe("split inbox manager", () => {
     const $ = load(renderToStaticMarkup(<SplitInboxManager {...managerProps} initialDraft={{ name: "Jamie", people: ["jamie@example.com"] }} />));
     expect($(".split-manager-heading h2").text()).toBe("Create split");
     expect($(".split-editor-name").val()).toBe("Jamie");
-    expect($("textarea").first().text()).toBe("jamie@example.com");
-    expect($("button[type=submit]").attr("disabled")).toBeDefined();
-    expect($("button.split-preview-button").text()).toBe("Preview matches");
+    expect($(".split-rule-chip").text()).toBe("jamie@example.com");
+    expect($("button[type=submit]").attr("disabled")).toBeUndefined();
+    expect($("button[type=submit]").text()).toBe("Review matches");
+    expect($(".split-review-guidance").text()).toContain("save the split after reviewing");
+    expect($("button").filter((_, node) => $(node).text() === "Save split")).toHaveLength(0);
     expect($(".split-label-fields select option").map((_, node) => $(node).text()).get()).toEqual(["Create a new label", "Work"]);
     expect($(".split-sync-note").text()).toContain("Turning off a split keeps its HEY label");
     expect(managerProps.onPreview).not.toHaveBeenCalled();
@@ -67,6 +69,7 @@ describe("split inbox manager", () => {
     const $ = load(renderToStaticMarkup(<SplitInboxManager {...managerProps} initialDraft={paused} />));
     expect($(".split-manager-heading h2").text()).toBe("Edit split");
     expect($("button[type=submit]").attr("disabled")).toBeUndefined();
+    expect($("button[type=submit]").text()).toBe("Save split");
     expect($(".split-label-fields select").val()).toBe("123");
     expect($(".split-enabled input").attr("checked")).toBeUndefined();
   });
@@ -75,6 +78,19 @@ describe("split inbox manager", () => {
     const $ = load(renderToStaticMarkup(<SplitInboxManager {...managerProps} splits={[]} />));
     expect($(".split-manager-heading h2").text()).toBe("Create split");
     expect($(".split-rule-fields").text()).toContain("including your replies");
+    expect($(".split-rule-fields").text()).toContain("Leave empty to add conversations yourself.");
+  });
+
+  it("normalizes prefilled rules into removable chips and retains invalid drafts", () => {
+    const $ = load(renderToStaticMarkup(<SplitInboxManager {...managerProps} initialDraft={{ people: ["Jamie@Example.com", "jamie@example.com", "incomplete"], domains: ["@COMPANY.COM", "company.com"] }} />));
+    expect($(".split-rule-chip > span").map((_, node) => $(node).text()).get()).toEqual(["jamie@example.com", "company.com"]);
+    expect($("input[placeholder='Add an email address']").val()).toBe("incomplete");
+    expect($("button[aria-label='Remove jamie@example.com']").attr("type")).toBe("button");
+  });
+
+  it("describes a manual-only split in the list", () => {
+    const $ = load(renderToStaticMarkup(<SplitInboxManager {...managerProps} splits={[{ ...team, people: [], domains: [] }]} />));
+    expect($(".split-manager-rule-summary").text()).toBe("Conversations you add yourself");
   });
 });
 
@@ -88,7 +104,13 @@ describe("split editor validation", () => {
     expect(splitEditorValidation(valid)).toEqual({});
     expect(splitEditorValidation({ ...valid, people: "", domains: "@COMPANY.COM" })).toEqual({});
     expect(splitEditorValidation({ ...valid, domains: "" })).toEqual({});
-    expect(splitEditorValidation({ ...valid, people: "", domains: "" }).rules).toBeDefined();
+    expect(splitEditorValidation({ ...valid, people: "", domains: "" })).toEqual({});
+    expect(splitEditorValidation({ ...valid, people: "", domains: "", labelId: "123" })).toEqual({});
+  });
+  it("includes uncommitted entries in validation so review cannot omit them", () => {
+    expect(splitEditorValidation({ ...valid, peoplePending: "broken" }).people).toBeDefined();
+    expect(splitEditorValidation({ ...valid, domainsPending: "*.example.com" }).domains).toBeDefined();
+    expect(splitEditorValidation({ ...valid, peoplePending: "next@example.com", domainsPending: "other.example.com" })).toEqual({});
   });
   it("uses the shared validator for malformed domains, email syntax, limits and labels", () => {
     expect(splitEditorValidation({ ...valid, domains: "https://company.com" }).domains).toBeDefined();

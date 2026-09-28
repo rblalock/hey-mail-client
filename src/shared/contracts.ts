@@ -1,4 +1,4 @@
-import type { MailSplitDraft, MailSplitPreview, MailSplitState } from "./mail-splits";
+import type { AddToSplitRequest, MailSplitDraft, MailSplitPage, MailSplitPreview, MailSplitState } from "./mail-splits";
 
 export type RuntimeId = "hey" | "pi" | "hey-auth" | "hey-skill" | "hey-agent-extension";
 
@@ -275,7 +275,7 @@ export type ImboxResult = {
   detail?: string;
 };
 
-export type MailboxListOptions = { page?: string; paginated?: boolean };
+export type MailboxListOptions = { page?: string; paginated?: boolean; singlePage?: boolean };
 
 export type MailThreadListing = {
   kind: "bundle" | "contact";
@@ -930,6 +930,8 @@ export type HeyAgentApi = {
     removeSplit(id: string): Promise<MailSplitState>;
     previewSplit(draft: MailSplitDraft): Promise<MailSplitPreview>;
     refreshSplits(): Promise<MailSplitState>;
+    listSplitMail(id: string, page?: string): Promise<MailSplitPage>;
+    addToSplit(request: AddToSplitRequest): Promise<MailSplitState>;
     subscribeSplits(listener: (state: MailSplitState) => void): () => void;
     listImbox(): Promise<ImboxResult>;
     listMailbox(box: MailboxKey, options?: MailboxListOptions): Promise<ImboxResult>;

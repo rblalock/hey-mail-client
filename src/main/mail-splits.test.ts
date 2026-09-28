@@ -332,3 +332,112 @@ describe("split lifecycle and account boundaries", () => {
     expect(Object.values((await second.service.get()).memberships)).toEqual([[]]);
   });
 });
+
+describe("manual split additions", () => {
+  async function manualFixture() {
+    const members = new Map<string, ImboxPosting>();
+    const labels = [{ id: "31", name: "Existing" }];
+    const fixtureResult = await fixture({
+      listLabels: vi.fn(async () => labels),
+      listLabelPage: vi.fn(async () => ({ postings: [...members.values()] })),
+      createLabel: vi.fn(async (name: string, ids: string[]) => {
+        labels.push({ id: "32", name });
+        ids.forEach((id) => members.set(id, row(id, "manual@elsewhere.com")));
+        return { id: "32", name };
+      }),
+      addLabel: vi.fn(async (_labelId: string, ids: string[]) => { ids.forEach((id) => members.set(id, row(id, "manual@elsewhere.com"))); }),
+    });
+    return { ...fixtureResult, members, labels };
+  }
+
+  it("defers an empty manual-only label and files selected conversations even while paused", async () => {
+    const { service, dependencies, file } = await manualFixture();
+    const saved = await service.save({ ...draft, enabled: false, people: [], domains: [] });
+    const split = saved.splits[0]!;
+    await service.observe([row()]);
+    expect(dependencies.createLabel).not.toHaveBeenCalled();
+    const added = await service.addToSplit({ splitId: split.id, postingIds: ["88"] });
+    expect(dependencies.createLabel).toHaveBeenCalledExactlyOnceWith("Team", ["88"]);
+    expect(dependencies.addLabel).not.toHaveBeenCalled();
+    expect(added.splits[0]).toEqual({ ...split, labelId: "32" });
+    expect(added.memberships[split.id]).toEqual(["1088"]);
+    expect(JSON.parse(await readFile(file, "utf8")).splits[0]).toEqual(added.splits[0]);
+  });
+
+  it("merges future rules without replacing prior people, domains, ID, enabled state, or label", async () => {
+    const { service, dependencies } = await manualFixture();
+    const saved = await service.save({ ...draft, enabled: false, labelId: "31", people: ["old@company.com"] });
+    const split = saved.splits[0]!;
+    const result = await service.addToSplit({ splitId: split.id, postingIds: ["88"], people: ["NEW@company.com"], domains: ["other.com", "company.com"] });
+    expect(result.splits[0]).toEqual({ ...split, people: ["old@company.com", "new@company.com"], domains: ["company.com", "other.com"] });
+    expect(dependencies.addLabel).toHaveBeenCalledExactlyOnceWith("31", ["88"]);
+    expect(dependencies.createLabel).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid selections and combined rule limits before any mail writes", async () => {
+    const { service, dependencies } = await manualFixture();
+    const saved = await service.save({ ...draft, enabled: false, people: Array.from({ length: 50 }, (_, index) => `p${index}@company.com`) });
+    const splitId = saved.splits[0]!.id;
+    await expect(service.addToSplit({ splitId, postingIds: ["88"], people: ["extra@company.com"] })).rejects.toThrow("at most 50");
+    await expect(service.addToSplit({ splitId, postingIds: ["--all"] })).rejects.toThrow("unique HEY");
+    expect(dependencies.createLabel).not.toHaveBeenCalled();
+    expect(dependencies.addLabel).not.toHaveBeenCalled();
+  });
+
+  it("preserves confirmed partial membership and retries only missing postings without saving future rules early", async () => {
+    const { service, dependencies, members } = await manualFixture();
+    const saved = await service.save({ ...draft, enabled: false, labelId: "31" });
+    const splitId = saved.splits[0]!.id;
+    const ids = Array.from({ length: 30 }, (_, index) => String(index + 10));
+    vi.mocked(dependencies.addLabel).mockImplementationOnce(async (_label, batch) => { batch.forEach((id) => members.set(id, row(id))); })
+      .mockRejectedValueOnce(new Error("private server error"));
+    await expect(service.addToSplit({ splitId, postingIds: ids, domains: ["future.com"] })).rejects.toThrow("Some conversations may already");
+    const partial = await service.get();
+    expect(partial.memberships[splitId]).toHaveLength(25);
+    expect(partial.splits[0]!.domains).toEqual(["company.com"]);
+    expect(JSON.stringify(partial)).not.toContain("private server");
+    const done = await service.addToSplit({ splitId, postingIds: ids, domains: ["future.com"] });
+    expect(vi.mocked(dependencies.addLabel).mock.calls.at(-1)).toEqual(["31", ids.slice(25)]);
+    expect(done.memberships[splitId]).toHaveLength(30);
+    expect(done.splits[0]!.domains).toEqual(["company.com", "future.com"]);
+    expect(done.errors).toEqual({});
+  });
+
+  it("reconciles uncertain label creation and never recreates after an unconfirmed response", async () => {
+    const { service, dependencies, labels, members } = await manualFixture();
+    const saved = await service.save({ ...draft, enabled: false, people: [], domains: [] });
+    const splitId = saved.splits[0]!.id;
+    vi.mocked(dependencies.createLabel).mockImplementation(async (name, ids) => {
+      labels.push({ id: "32", name });
+      ids.forEach((id) => members.set(id, row(id)));
+      throw new Error("Response lost");
+    });
+    await expect(service.addToSplit({ splitId, postingIds: ["88"] })).rejects.toThrow("could not be completed");
+    const added = await service.addToSplit({ splitId, postingIds: ["88"] });
+    expect(added.splits[0]?.labelId).toBe("32");
+    expect(dependencies.createLabel).toHaveBeenCalledTimes(1);
+    expect(dependencies.addLabel).not.toHaveBeenCalled();
+  });
+
+  it("does not claim success when membership read-back cannot confirm selected postings", async () => {
+    const { service, dependencies } = await manualFixture();
+    const saved = await service.save({ ...draft, enabled: false, labelId: "31" });
+    vi.mocked(dependencies.addLabel).mockResolvedValue(undefined);
+    await expect(service.addToSplit({ splitId: saved.splits[0]!.id, postingIds: ["88"], domains: ["future.com"] })).rejects.toThrow("could not be confirmed");
+    expect((await service.get()).splits[0]!.domains).toEqual(["company.com"]);
+  });
+
+  it("honors account deactivation before subsequent manual batches", async () => {
+    const { service, dependencies } = await manualFixture();
+    const saved = await service.save({ ...draft, enabled: false, labelId: "31" });
+    const started = deferred();
+    const finish = deferred();
+    vi.mocked(dependencies.addLabel).mockImplementation(async () => { started.resolve(); await finish.promise; });
+    const adding = service.addToSplit({ splitId: saved.splits[0]!.id, postingIds: Array.from({ length: 30 }, (_, index) => String(index + 10)) });
+    await started.promise;
+    service.stop();
+    finish.resolve();
+    await expect(adding).rejects.toThrow("changed");
+    expect(dependencies.addLabel).toHaveBeenCalledTimes(1);
+  });
+});

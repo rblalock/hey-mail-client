@@ -6,7 +6,7 @@ import { isNativeEditingBinding } from "./keyboard-scope";
 export type ShortcutId =
   | "commands" | "search" | "compose" | "next" | "previous" | "open" | "back" | "undo-trash"
   | "toggle-navigation" | "toggle-agent" | "focus-agent" | "select-next" | "select-previous"
-  | "split-next" | "split-previous" | "split-create" | "split-create-person" | "split-create-domain" | "split-manage"
+  | "split-next" | "split-previous" | "split-create" | "split-create-person" | "split-create-domain" | "split-manage" | "split-add"
   | `split-go:${string}`
   | "composer-write" | "composer-send" | "composer-save" | "composer-cc" | "composer-bcc" | "composer-attach"
   | "select" | "bulk-actions" | "read-together" | "reply-together" | "bulk-label" | "bulk-collection" | "bulk-imbox" | "bulk-feed" | "bulk-trail" | "bulk-ignore"
@@ -63,6 +63,7 @@ const CATALOG: ShortcutCatalogEntry[] = [
   { id: "split-previous", label: "Previous split", hey: ["shift+tab"], superhuman: ["shift+tab"], scope: "mailbox" },
   { id: "split-create", label: "Create split", hey: [], superhuman: [], scope: "mailbox" },
   { id: "split-manage", label: "Manage splits", hey: [], superhuman: [], scope: "mailbox" },
+  { id: "split-add", label: "Add to existing split…", hey: [], superhuman: [], scope: "global" },
   { id: "split-create-person", label: "Create split from this sender", hey: [], superhuman: [], scope: "conversation" },
   { id: "split-create-domain", label: "Create split from this sender’s domain", hey: [], superhuman: [], scope: "conversation" },
   { id: "bulk-actions", label: "Focus bulk actions", hey: [";"], superhuman: [";"], scope: "bulk" },

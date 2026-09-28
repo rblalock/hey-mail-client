@@ -1,4 +1,4 @@
-import type { ImboxPosting } from "./contracts";
+import type { ImboxPosting, ImboxResult, MailboxKey } from "./contracts";
 
 export type MailSplit = {
   id: string;
@@ -24,6 +24,18 @@ export type MailSplitPreview = {
   samples: ImboxPosting[];
   scope: string;
 };
+export type MailSplitPage = {
+  mailboxes: Partial<Record<MailboxKey, ImboxResult>>;
+  nextPage?: string;
+};
+export type AddToSplitRequest = {
+  splitId: string;
+  postingIds: string[];
+  people?: string[];
+  domains?: string[];
+};
+
+export const SPLIT_MAILBOXES: readonly MailboxKey[] = ["imbox", "feedbox", "trailbox", "asidebox", "laterbox", "bubblebox"];
 
 export const MAX_MAIL_SPLITS = 20;
 export const MAX_SPLIT_PEOPLE = 50;
@@ -79,7 +91,6 @@ export function normalizeMailSplitDraft(value: unknown): MailSplitDraft {
   if (!item.labelId && item.labelName.trim().startsWith("-")) throw new Error("New HEY label names cannot start with a dash.");
   const people = rules(item.people, "people", MAX_SPLIT_PEOPLE);
   const domains = rules(item.domains, "domains", MAX_SPLIT_DOMAINS);
-  if (!people.length && !domains.length) throw new Error("Add at least one person or domain.");
   return {
     ...(item.id ? { id: item.id as string } : {}),
     name: item.name.trim(),
@@ -88,6 +99,22 @@ export function normalizeMailSplitDraft(value: unknown): MailSplitDraft {
     domains,
     ...(item.labelId ? { labelId: item.labelId as string } : {}),
     labelName: item.labelName.trim(),
+  };
+}
+
+export function normalizeAddToSplit(value: unknown): AddToSplitRequest {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Choose conversations and a split.");
+  const item = value as Record<string, unknown>;
+  if (!isMailSplitId(item.splitId)) throw new Error("Choose a valid split.");
+  if (!Array.isArray(item.postingIds) || !item.postingIds.length || item.postingIds.length > 100
+    || item.postingIds.some((id) => !isHeyId(id)) || new Set(item.postingIds).size !== item.postingIds.length) {
+    throw new Error("Choose 1–100 unique HEY conversations.");
+  }
+  return {
+    splitId: item.splitId,
+    postingIds: item.postingIds as string[],
+    ...(item.people === undefined ? {} : { people: rules(item.people, "people", MAX_SPLIT_PEOPLE) }),
+    ...(item.domains === undefined ? {} : { domains: rules(item.domains, "domains", MAX_SPLIT_DOMAINS) }),
   };
 }
 
