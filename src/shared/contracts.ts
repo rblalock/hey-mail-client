@@ -37,6 +37,8 @@ export type MailContact = {
 export type ImboxPosting = {
   id: string;
   topicId?: string;
+  /** Renderer grouping provenance; identifies the source without moving server mail. */
+  sourceBox?: MailboxKey;
   kind?: string;
   boxGroupId?: string;
   appUrl?: string;
@@ -385,6 +387,7 @@ export type MailWatchChange = {
   postingId?: string;
   topicId?: string;
   isNew?: boolean;
+  postingSeen?: boolean;
 };
 
 export type MailSearchOption = {

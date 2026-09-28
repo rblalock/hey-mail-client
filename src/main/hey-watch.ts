@@ -20,6 +20,7 @@ export function parseWatchLine(line: string): MailWatchChange | undefined {
   const change = text(value.change);
   if (!change || !["ready", "disconnected", "added", "updated", "deleted", "resync"].includes(change)) return undefined;
   const box = record(value.box);
+  const posting = record(value.posting);
   return {
     change: change as MailWatchChange["change"],
     ...(text(value.at) ? { at: text(value.at) } : {}),
@@ -27,6 +28,7 @@ export function parseWatchLine(line: string): MailWatchChange | undefined {
     ...(text(value.posting_id) ? { postingId: text(value.posting_id) } : {}),
     ...(text(value.thread_id) ? { topicId: text(value.thread_id) } : {}),
     ...(typeof value.new === "boolean" ? { isNew: value.new } : {}),
+    ...((change === "added" || change === "updated") && typeof posting.seen === "boolean" ? { postingSeen: posting.seen } : {}),
   };
 }
 

@@ -16,7 +16,7 @@ import ImboxView from "./components/ImboxView";
 import SplitInboxManager from "./components/SplitInboxManager";
 import SplitInboxTabs from "./components/SplitInboxTabs";
 import AddToSplitDialog from "./components/AddToSplitDialog";
-import { useSplitMail } from "./use-split-mail";
+import { applyWatchSeen, useSplitMail } from "./use-split-mail";
 import { createMailListViewState, type MailListViewState } from "./mail-list-view-state";
 import type { MailSplitDraft, MailSplitState } from "../../shared/mail-splits";
 import { filterSplitMailboxes, splitDraftFromPosting, splitPendingCounts, splitViewIds } from "./split-mailbox";
@@ -238,7 +238,7 @@ export default function App() {
   }, [mailboxes, pendingTrashIds, splitState, enabledSplits]);
   const mailbox = useMemo(() => {
     if (accountSplit) {
-      const groups = groupAccountSplitMailboxes(viewSectionMailboxes, selected?.id === retainedActiveId ? retainedActiveId : undefined);
+      const groups = groupAccountSplitMailboxes(viewSectionMailboxes, selected?.id === retainedActiveId ? retainedActiveId : undefined, selected?.sourceBox);
       const unavailable = Boolean(splitMail.error) && !Object.keys(viewSectionMailboxes).length;
       return { status: unavailable ? "unavailable" as const : "ready" as const, detail: splitMail.error, boxKey: "imbox" as const, boxName: namedSplit!.name, postings: Object.values(groups).flat(), nextPage: splitMail.nextPage };
     }
@@ -251,7 +251,7 @@ export default function App() {
     }
     const { bubbledUp, newForYou, previouslySeen } = groupImboxPostings(result.postings);
     return { ...result, postings: [...bubbledUp, ...newForYou, ...previouslySeen] };
-  }, [activeMailbox, accountSplit, namedSplit, splitMail.nextPage, splitMail.error, mailboxes, pendingTrashIds, retainedActiveId, sectionedImbox, viewSectionMailboxes, selected?.id]);
+  }, [activeMailbox, accountSplit, namedSplit, splitMail.nextPage, splitMail.error, mailboxes, pendingTrashIds, retainedActiveId, sectionedImbox, viewSectionMailboxes, selected?.id, selected?.sourceBox]);
   const navigationPostings = useMemo(() => {
     if (!sectionedImbox) return mailbox?.postings ?? [];
     const byId = new Map(mailbox?.postings.map((posting) => [posting.id, posting]));
@@ -656,6 +656,7 @@ export default function App() {
     let disposed = false;
     let resyncVersion = 0;
     const unsubscribe = window.heyAgent.mail.subscribe((change) => {
+      setMailboxes((current) => applyWatchSeen(current, change));
       if (change.change === "deleted" && change.postingId) {
         const id = change.postingId;
         setMailboxes((current) => Object.fromEntries(Object.entries(current).map(([key, box]) => [key,
@@ -733,8 +734,11 @@ export default function App() {
   const selectPosting = useCallback((posting: ImboxPosting, audible = true) => {
     if (sectionedImbox) {
       if (!selected || readerOrigin) readerSequence.current = navigationPostings.map((item) => item.id);
-      const active = (accountSplit ? groupAccountSplitMailboxes(sectionMailboxes) : groupSectionedImbox(sectionMailboxes)).active;
-      setRetainedActiveId(active.some((item) => item.id === posting.id) ? posting.id : undefined);
+      const groups = accountSplit ? groupAccountSplitMailboxes(sectionMailboxes) : undefined;
+      const pending = groups ? [...groups.active, ...groups.feed, ...groups.paperTrail] : groupSectionedImbox(sectionMailboxes).active;
+      // Keep the opened pending row in the reader's sequence until it closes.
+      // Read Feed/Paper Trail mail clears on return, just like Active Imbox mail.
+      setRetainedActiveId(pending.some((item) => item.id === posting.id) ? posting.id : undefined);
     }
     selectionRange.current = undefined;
     if (audible) appSound.play("open", "interface");
@@ -799,7 +803,7 @@ export default function App() {
     }
     const advancesReader = Boolean(selected && request.postingIds.includes(selected.id) && (completing || READER_TRIAGE_OPERATIONS.has(request.operation)));
     const removedIds = new Set(request.postingIds);
-    const groups = sectionedImbox ? (accountSplit ? groupAccountSplitMailboxes(sectionMailboxes, retainedActiveId) : groupSectionedImbox(sectionMailboxes, retainedActiveId)) : undefined;
+    const groups = sectionedImbox ? (accountSplit ? groupAccountSplitMailboxes(sectionMailboxes, retainedActiveId, selected?.sourceBox) : groupSectionedImbox(sectionMailboxes, retainedActiveId)) : undefined;
     const remainingActive = groups ? new Set(Object.entries(groups).filter(([key]) => key !== "previouslySeen").flatMap(([, rows]) => rows.map((posting) => posting.id))) : undefined;
     const sequence = sectionedImbox ? navigationPostings.filter((posting) => !completing || remainingActive?.has(posting.id)) : mailbox?.postings ?? [];
     const nextId = cursorAfterRemoval(sequence, selected?.id ?? highlightedId, removedIds);
@@ -829,7 +833,7 @@ export default function App() {
       appSound.play(request.operation === "spam" ? "warning" : "success", "mail");
       setNotice({ message: result.message, ...(result.undo ? { undo: result.undo } : {}) });
       await refresh();
-      if (completing && !advancesReader) requestAnimationFrame(() => {
+      if (completing && (!advancesReader || !nextPosting)) requestAnimationFrame(() => {
         const target = nextId ? document.getElementById(`mail-row-${nextId}`) : document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .sectioned-imbox-heading button');
         target?.focus({ preventScroll: true });
       });
@@ -1062,7 +1066,7 @@ export default function App() {
     const requests = Array.isArray(notice.undo) ? notice.undo : [notice.undo];
     setNotice(undefined);
     for (const request of requests) if (request.operation === "undo-done") {
-      for (const box of ["imbox", "laterbox", "asidebox"] as const) requestSequence.current[box] = (requestSequence.current[box] ?? 0) + 1;
+      for (const box of MAILBOX_KEYS) requestSequence.current[box] = (requestSequence.current[box] ?? 0) + 1;
       setLoadingMailboxes({});
       setMailboxes((current) => applyOptimisticMailMutation(current, activeMailbox, highlightedId, request).mailboxes);
       splitMail.apply(request);
@@ -1405,7 +1409,7 @@ export default function App() {
       if (sectionedImbox && command.id === "seen") return { ...command, label: bulkSelectedIds.length ? `Done · ${bulkSelectedIds.length} selected` : accountSplit ? "Done" : "Done — move to Previously Seen" };
       if (!activeMailbox) return command;
       const ids = bulkSelectedIds.length ? bulkSelectedIds : actionPosting ? [actionPosting.id] : [];
-      const source = bulkSelectedIds.length && sectionedImbox ? sectionedSelectionSource(sectionMailboxes, bulkSelectedIds, accountSplit)
+      const source = bulkSelectedIds.length && sectionedImbox ? sectionedSelectionSource(sectionMailboxes, bulkSelectedIds, accountSplit, retainedActiveId, selected?.sourceBox)
         : !bulkSelectedIds.length && actionPosting ? postingSource(actionPosting) : activeMailbox;
       const toggle = mailToggle(command.id, ids, source, bulkSelectedIds.length ? mailbox?.postings : actionPosting ? [actionPosting] : []);
       const label = command.id === "aside" ? (toggle?.active ? "Set Aside: remove" : "Set Aside") : toggle?.label;
@@ -1413,7 +1417,7 @@ export default function App() {
     });
     const splitCommands: ShortcutDefinition[] = enabledSplits.length ? splitIds.map((id) => ({ id: `split-go:${id}`, label: `Go to split: ${id === "all" ? "All" : id === "remaining" ? "Remaining" : enabledSplits.find((split) => split.id === id)!.name}`, keys: [], display: "", scope: "global" })) : [];
     return [...helperCommands, ...contextCommands, ...contextualCommands, ...splitCommands];
-  }, [activeMailbox, actionPosting, highlightedPosting, accountSplit, agentContextAttachments.length, agentWorkspace, bulkSelectedIds, contextCommands, contextualHelpers, mailbox, readTogether, selected, shortcuts, trash.items.length, notice?.undo, postingSource, sectionedImbox, sectionMailboxes, enabledSplits, splitIds, threadListing]);
+  }, [activeMailbox, actionPosting, highlightedPosting, accountSplit, agentContextAttachments.length, agentWorkspace, bulkSelectedIds, contextCommands, contextualHelpers, mailbox, readTogether, selected, shortcuts, trash.items.length, notice?.undo, postingSource, sectionedImbox, sectionMailboxes, retainedActiveId, enabledSplits, splitIds, threadListing]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1659,6 +1663,7 @@ export default function App() {
                 mailboxKey={activeMailbox} showSenderAvatars={settings.showSenderAvatars}
                 sectioned={sectionedImbox} accountSplit={accountSplit} sectionMailboxes={viewSectionMailboxes}
                 retainedActiveId={selected?.id === retainedActiveId ? retainedActiveId : undefined}
+                retainedSourceBox={selected?.id === retainedActiveId ? selected?.sourceBox : undefined}
                 profileKey={`${window.heyAgent.profiles.current.active?.key ?? "default"}${sectionedImbox && splitId !== "all" ? `:split:${splitId}` : ""}`}
                 viewState={splitViewState}
                 initialHistoryCollapsed={splitId !== "all"}

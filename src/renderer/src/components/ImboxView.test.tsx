@@ -192,13 +192,37 @@ describe("Imbox section presentation", () => {
       bubblebox: { ...imbox([row("scheduled", false, true)]), boxKey: "bubblebox" },
     } });
     expect($(".sectioned-imbox-heading button span").map((_, el) => $(el).text()).get()).toEqual(["Active", "Reply Later", "Set Aside", "Bubbled Up", "The Feed", "Paper Trail", "Scheduled Bubble Up", "Previously Seen"]);
-    expect($(".mail-row").map((_, el) => $(el).attr("data-posting-id")).get()).toEqual(["active", "later", "aside", "due", "feed", "trail", "scheduled", "seen"]);
-    expect($(".sectioned-imbox-heading em").map((_, el) => $(el).text()).get()).toEqual(Array(8).fill("1 loaded"));
+    expect($(".mail-row").map((_, el) => $(el).attr("data-posting-id")).get()).toEqual(["active", "later", "aside", "due", "feed", "scheduled", "seen", "trail"]);
+    expect($(".sectioned-imbox-heading em").map((_, el) => $(el).text()).get()).toEqual(["1 loaded", "1 loaded", "1 loaded", "1 loaded", "1 loaded", "0 loaded", "1 loaded", "2 loaded"]);
+    expect($("[data-section=paperTrail] .mail-row")).toHaveLength(0);
+    expect($("[data-section=previouslySeen] #mail-row-trail")).toHaveLength(1);
     expect($("[data-section=scheduledBubbleUp] .bubbled-up-mark")).toHaveLength(0);
     expect($("[data-section=bubbledUp] .bubbled-up-mark")).toHaveLength(1);
     expect($(".imbox-layout-switch")).toHaveLength(0);
     expect($(".bulk-action-bar button").filter((_, el) => $(el).text() === "Add to Split")).toHaveLength(1);
     expect($(".sectioned-imbox-sentinel").parent().hasClass("mail-list")).toBe(true);
+  });
+
+  it("keeps read split mail behind collapsed history while saved mail stays visible", () => {
+    const sectionMailboxes = {
+      imbox: imbox([row("seen", true)]),
+      feedbox: { ...imbox([row("feed-read", true), row("feed-new", false)]), boxKey: "feedbox" as const },
+      trailbox: { ...imbox([row("trail-read", true)]), boxKey: "trailbox" as const },
+      laterbox: { ...imbox([row("kept", true)]), boxKey: "laterbox" as const },
+    };
+    const $ = render(imbox([]), false, [], { accountSplit: true, sectionMailboxes, initialHistoryCollapsed: true });
+    expect($(".mail-row").map((_, el) => $(el).attr("data-posting-id")).get()).toEqual(["kept", "feed-new"]);
+    expect($("[data-section=previouslySeen] button[aria-expanded=false]")).toHaveLength(1);
+    expect($("[data-section=previouslySeen] em").text()).toBe("3 loaded");
+  });
+
+  it("shows available Feed and Paper Trail history even when Imbox is unavailable", () => {
+    const $ = render(imbox([]), false, [], { accountSplit: true, sectionMailboxes: {
+      imbox: { ...imbox([]), status: "unavailable", detail: "Offline" },
+      trailbox: { ...imbox([row("trail-read", true)]), boxKey: "trailbox" },
+    } });
+    expect($("[data-section=previouslySeen] #mail-row-trail-read")).toHaveLength(1);
+    expect($("[data-section=active]").text()).toContain("Offline");
   });
 
   it("keeps split paging and Retry outside collapsed history, including pages with no matches", () => {

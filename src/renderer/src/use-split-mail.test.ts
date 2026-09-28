@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImboxPosting, MailboxKey, MailWatchChange } from "../../shared/contracts";
 import type { MailSplitPage } from "../../shared/mail-splits";
-import { mergeSplitPage, SplitMailCache, SplitMailSession } from "./use-split-mail";
+import { applyWatchSeen, mergeSplitPage, SplitMailCache, SplitMailSession } from "./use-split-mail";
 import { groupAccountSplitMailboxes } from "./sectioned-imbox";
 
 const row = (id: string, seen = false): ImboxPosting => ({ id, topicId: `topic-${id}`, seen, subject: id, summary: "", createdAt: "2026-09-27", contacts: [], sender: { name: "Example" }, visibleEntryCount: 1 });
@@ -42,6 +42,50 @@ function cacheFixture(options: { maxSessions?: number; staleAfterMs?: number; no
 }
 afterEach(() => { sessions.splice(0).forEach((session) => session.stop()); caches.splice(0).forEach((cache) => cache.stop()); vi.useRealTimers(); });
 
+describe("watched posting read state", () => {
+  const update: MailWatchChange = { change: "updated", box: { id: "feed", key: "feedbox", name: "The Feed" }, postingId: "shared", topicId: "topic-shared", postingSeen: true };
+
+  it.each([
+    { postingId: "shared", topicId: "topic-shared" },
+    { postingId: "shared", topicId: undefined },
+    { postingId: undefined, topicId: "topic-shared" },
+  ])("updates only existing rows in the stated physical source with identity %j", (identity) => {
+    const shared = row("shared");
+    const current = { feedbox: box("feedbox", [shared, row("other")]), trailbox: box("trailbox", [shared]) };
+    const changed = applyWatchSeen(current, { ...update, ...identity });
+    expect(changed.feedbox?.postings).toEqual([{ ...shared, seen: true }, row("other")]);
+    expect(changed.feedbox?.postings[1]).toBe(current.feedbox.postings[1]);
+    expect(changed.trailbox).toBe(current.trailbox);
+    expect(current.feedbox.postings[0]?.seen).toBe(false);
+    expect(applyWatchSeen(changed, { ...update, ...identity })).toBe(changed);
+    expect(applyWatchSeen(changed, { ...update, ...identity, postingSeen: false }).feedbox?.postings[0]?.seen).toBe(false);
+  });
+
+  it.each<Partial<MailWatchChange>>([
+    { box: undefined },
+    { box: { id: "trail", key: "trailbox", name: "Paper Trail" } },
+    { box: { id: "all", key: "all", name: "All" } },
+    { box: { id: "invalid", key: "constructor", name: "Invalid" } },
+    { postingId: undefined, topicId: undefined },
+    { postingId: "unfiltered", topicId: "topic-unfiltered" },
+    { postingId: "shared", topicId: "topic-other" },
+    { postingId: "other", topicId: "topic-shared" },
+    { postingId: "", topicId: "topic-shared" },
+    { postingId: " shared", topicId: "topic-shared" },
+    { postingId: 42 as unknown as string },
+    { topicId: " " },
+    { postingSeen: undefined, isNew: false },
+    { postingSeen: "true" as unknown as boolean },
+    { change: "ready" },
+    { change: "disconnected" },
+    { change: "deleted" },
+    { change: "resync" },
+  ])("does not patch or introduce rows for unsupported or conflicting watch data: %j", (change) => {
+    const current = { feedbox: box("feedbox", [row("shared"), row("other")]) };
+    expect(applyWatchSeen(current, { ...update, ...change })).toBe(current);
+  });
+});
+
 describe("split page merging", () => {
   it("prepends an authoritative head, updates historical rows, and retains older history", () => {
     const old = { imbox: box("imbox", [row("head"), row("older", true), row("oldest", true)]) };
@@ -75,7 +119,7 @@ describe("split page merging", () => {
     expect(merged.laterbox?.postings).toEqual([saved]);
     expect(merged.imbox?.postings).toHaveLength(1);
     const groups = groupAccountSplitMailboxes(merged);
-    expect(groups.replyLater).toEqual([saved]);
+    expect(groups.replyLater).toEqual([{ ...saved, sourceBox: "laterbox" }]);
     expect(groups.previouslySeen).toEqual([]);
   });
 
@@ -112,7 +156,7 @@ describe("split request lifecycle", () => {
     start(); await tick(); await session.loadMore(); await session.refresh();
     expect(session.state.mailboxes.imbox?.postings).toEqual([{ ...shared, seen: true }]);
     expect(session.state.mailboxes.laterbox?.postings).toEqual([shared]);
-    expect(groupAccountSplitMailboxes(session.state.mailboxes).replyLater).toEqual([shared]);
+    expect(groupAccountSplitMailboxes(session.state.mailboxes).replyLater).toEqual([{ ...shared, sourceBox: "laterbox" }]);
     expect(session.state.nextPage).toBe("second");
   });
 
@@ -370,6 +414,42 @@ describe("retained account split views", () => {
     expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "b", "b"]);
     select("a"); await tick();
     expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "b", "b", "a"]);
+  });
+
+  it.each(["feedbox", "trailbox"] as const)("propagates remote read and unread state through overlapping loaded %s history", async (source) => {
+    vi.useFakeTimers();
+    const { select, list, emit } = cacheFixture();
+    list.mockImplementation(async (id, cursor) => ({
+      mailboxes: { [source]: box(source, cursor ? [row("shared"), row(`${id}-older`)] : [row(`${id}-head`)]) },
+      nextPage: cursor ? `${id}-next` : `${id}-history`,
+    }));
+    const first = select("a"); await tick(); await first.loadMore();
+    const second = select("b"); await tick(); await second.loadMore();
+    const ids = (session: SplitMailSession) => session.state.mailboxes[source]?.postings.map((posting) => posting.id);
+    const sharedSeen = (session: SplitMailSession) => session.state.mailboxes[source]?.postings.find((posting) => posting.id === "shared")?.seen;
+    const watched = { box: { id: source, key: source, name: source }, postingId: "shared", topicId: "topic-shared" };
+
+    emit({ ...watched, change: "added", postingSeen: true, isNew: true });
+    expect(sharedSeen(first)).toBe(true);
+    expect(sharedSeen(second)).toBe(true);
+    expect(list).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(list.mock.calls).toEqual([["a", undefined], ["a", "a-history"], ["b", undefined], ["b", "b-history"], ["b", undefined]]);
+    expect(sharedSeen(second)).toBe(true);
+
+    expect(select("a")).toBe(first); await tick();
+    expect(sharedSeen(first)).toBe(true);
+    emit({ ...watched, change: "updated", postingSeen: false, isNew: false });
+    expect(sharedSeen(first)).toBe(false);
+    expect(sharedSeen(second)).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(list.mock.calls.slice(5)).toEqual([["a", undefined], ["a", undefined]]);
+    expect(ids(first)).toEqual(["a-head", "shared", "a-older"]);
+    expect(ids(second)).toEqual(["b-head", "shared", "b-older"]);
+    expect(first.state.nextPage).toBe("a-next");
+    expect(second.state.nextPage).toBe("b-next");
+    expect(sharedSeen(first)).toBe(false);
+    expect(sharedSeen(second)).toBe(false);
   });
 
   it("refreshes the current split when an older split's async operation completes", async () => {

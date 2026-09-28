@@ -25,6 +25,10 @@ const snapshot = () => browser("snapshot", "-i");
 const assert = (condition, message) => evaluate(`(() => { if (!(${condition})) throw Error(${JSON.stringify(message)}); return true; })()`);
 const selected = () => `document.querySelector('.split-inbox-tabs [aria-selected="true"]')?.dataset.splitId`;
 const rowIn = (section, id) => `.sectioned-imbox-group[data-section="${section}"] #mail-row-${id}`;
+const sourceState = (box, id, seen) => `(() => {
+  const matches=Object.entries(window.__sectionedImboxPreview.snapshot()).flatMap(([source,rows])=>rows.filter(row=>row.id===${JSON.stringify(id)}).map(row=>({source,seen:row.seen})));
+  return matches.length===1&&matches[0].source===${JSON.stringify(box)}&&matches[0].seen===${seen};
+})()`;
 const artifacts = await mkdtemp(join(tmpdir(), "hey-split-proof-"));
 let phase = "startup";
 const checkpoint = async (name) => { phase = name; await snapshot(); console.log(`Checking: ${name}`); };
@@ -194,15 +198,84 @@ try {
   await browser("wait", ".thread-panel");
   await browser("press", "Escape");
 
-  await checkpoint("account-wide Feed and Paper Trail with source-correct Done");
+  await checkpoint("read Feed and Paper Trail belong in history with their original sources");
+  await expandHistory();
   await browser("wait", rowIn("feed", "2601"));
+  await browser("wait", rowIn("previouslySeen", "2701"));
+  await assert(`!document.querySelector('${rowIn("paperTrail", "2701")}')&&${sourceState("trailbox", "2701", true)}`, "Read Paper Trail mail remained pending or changed source");
+  // Simulate fresh unseen state through the same fictional API the renderer uses.
+  await evaluate(`window.heyAgent.mail.mutate({operation:'unseen',postingIds:['2701']})`);
+  await browser("click", '.imbox-titlebar button[aria-label="Refresh Team"]');
   await browser("wait", rowIn("paperTrail", "2701"));
-  await browser("focus", "#mail-row-2601");
-  await browser("press", "e");
-  await waitFor(`window.__sectionedImboxPreview.snapshot().feedbox.find(row=>row.id==='2601')?.seen===true`);
-  await assert(`Boolean(document.querySelector('${rowIn("feed", "2601")}'))&&!window.__sectionedImboxPreview.snapshot().imbox.some(row=>row.id==='2601')`, "Done moved Feed mail out of its source");
-  await browser("press", "Control+z");
-  await waitFor(`window.__sectionedImboxPreview.snapshot().feedbox.find(row=>row.id==='2601')?.seen===false`);
+  await assert(`!document.querySelector('${rowIn("previouslySeen", "2701")}')&&${sourceState("trailbox", "2701", false)}`, "New unseen Paper Trail state did not return to pending");
+
+  await checkpoint("Feed and Paper Trail Done clears pending, preserves source, and Undo restores it");
+  for (const [section, box, id] of [["feed", "feedbox", "2601"], ["paperTrail", "trailbox", "2701"]]) {
+    await browser("focus", `#mail-row-${id}`);
+    await browser("press", "e");
+    await waitFor(`!document.querySelector('${rowIn(section, id)}')&&Boolean(document.querySelector('${rowIn("previouslySeen", id)}'))&&${sourceState(box, id, true)}`);
+    await assert(`(() => {
+      const last=window.__sectionedImboxPreview.mutations.at(-1);
+      return last.operation==='done'&&last.completion?.some(item=>item.id==='${id}'&&item.sourceBox==='${box}')&&document.querySelectorAll('#mail-row-${id}').length===1;
+    })()`, `Done lost ${section} source metadata or rendered duplicate history`);
+    if (section === "feed") {
+      await selectSplit("vip");
+      await expandHistory();
+      await assert(`!document.querySelector('${rowIn(section, id)}')&&Boolean(document.querySelector('${rowIn("previouslySeen", id)}'))`, "Done left Feed pending in the overlapping VIP split");
+    }
+    await browser("press", "Control+z");
+    await waitFor(`Boolean(document.querySelector('${rowIn(section, id)}'))&&${sourceState(box, id, false)}`);
+    await assert(`!document.querySelector('${rowIn("previouslySeen", id)}')`, `Undo left ${section} duplicated in history`);
+    if (section === "feed") {
+      await selectSplit("team");
+      await browser("wait", rowIn(section, id));
+    }
+  }
+
+  await checkpoint("Feed and Paper Trail reading retains the row until Escape, then Enter opens the next row");
+  // Read Paper Trail first so the next row in each check is already read.
+  for (const [section, box, id, title, sourceLabel] of [["paperTrail", "trailbox", "2701", "Studio receipt — September workspace", "Paper Trail"], ["feed", "feedbox", "2601", "Team dispatch — a studio update", "The Feed"]]) {
+    await browser("focus", `#mail-row-${id}`);
+    await evaluate(`(() => {
+      const rows=[...document.querySelectorAll('.imbox-panel .mail-row')];
+      const next=rows[rows.findIndex(row=>row.dataset.postingId==='${id}')+1];
+      const posting=Object.values(window.__sectionedImboxPreview.snapshot()).flat().find(row=>row.id===next?.dataset.postingId);
+      if (!posting) throw Error('No next row available for ${section} keyboard proof');
+      window.__pendingNext={id:posting.id,subject:posting.subject};
+      return true;
+    })()`);
+    await browser("press", "Enter");
+    await waitFor(`document.querySelector('.thread-panel h1')?.textContent===${JSON.stringify(title)}&&${sourceState(box, id, true)}`);
+    await assert(`Boolean(document.querySelector('${rowIn(section, id)}'))&&!document.querySelector('${rowIn("previouslySeen", id)}')&&document.querySelector('.thread-back span')?.textContent===${JSON.stringify(sourceLabel)}`, `Opening ${section} lost the retained row or physical reader source`);
+    await browser("press", "Escape");
+    await waitFor(`!document.querySelector('.thread-panel')&&!document.querySelector('${rowIn(section, id)}')&&Boolean(document.querySelector('${rowIn("previouslySeen", id)}'))`);
+    await waitFor(`document.activeElement?.id==='mail-row-'+window.__pendingNext.id&&document.activeElement?.dataset.selected==='true'`);
+    await browser("press", "Enter");
+    await waitFor(`document.querySelector('.thread-panel h1')?.textContent===window.__pendingNext.subject`);
+    await browser("press", "Escape");
+  }
+  await selectSplit("vip");
+  await expandHistory();
+  await assert(`!document.querySelector('${rowIn("feed", "2601")}')&&Boolean(document.querySelector('${rowIn("previouslySeen", "2601")}'))`, "Reading Feed left pending mail in the overlapping VIP split");
+
+  await checkpoint("read saved mail keeps its workflow and native Feed and Paper Trail retain read mail");
+  await browser("focus", "#mail-row-2201");
+  await browser("press", "Enter");
+  await waitFor(`document.querySelector('.thread-panel h1')?.textContent==='Reply Later one — answer the invitation'&&${sourceState("laterbox", "2201", true)}`);
+  await browser("press", "Escape");
+  await assert(`[['replyLater','2201'],['setAside','2302'],['bubbledUp','2401'],['scheduledBubbleUp','2501']].every(([section,id])=>document.querySelector('.sectioned-imbox-group[data-section="'+section+'"] #mail-row-'+id)&&!document.querySelector('.sectioned-imbox-group[data-section="previouslySeen"] #mail-row-'+id))`, "Reading cleared saved or scheduled workflow membership");
+  for (const [label, box, ids] of [["The Feed", "feedbox", ["2601", "2602"]], ["Paper Trail", "trailbox", ["2701", "2702"]]]) {
+    await browser("click", `.sidebar nav[aria-label="Mail"] button[data-tooltip="${label}"]`);
+    await browser("wait", `#mail-row-${ids[0]}`);
+    await assert(`!document.querySelector('.imbox-panel .sectioned-imbox-group')&&${JSON.stringify(ids)}.every(id=>document.querySelector('#mail-row-'+id)?.dataset.unseen==='false'&&window.__sectionedImboxPreview.snapshot()['${box}'].some(row=>row.id===id&&row.seen))`, `Native ${label} hid read conversations`);
+  }
+  await browser("click", '.sidebar nav[aria-label="Mail"] button[data-tooltip="Imbox"]');
+  await selectSplit("team");
+  await expandHistory();
+  await evaluate(`window.heyAgent.mail.mutate({operation:'unseen',postingIds:['2601','2701']})`);
+  await browser("click", '.imbox-titlebar button[aria-label="Refresh Team"]');
+  await waitFor(`Boolean(document.querySelector('${rowIn("feed", "2601")}'))&&Boolean(document.querySelector('${rowIn("paperTrail", "2701")}'))`);
+  await assert(`!document.querySelector('${rowIn("previouslySeen", "2601")}')&&!document.querySelector('${rowIn("previouslySeen", "2701")}')&&${sourceState("feedbox", "2601", false)}&&${sourceState("trailbox", "2701", false)}`, "New unseen mail did not return from history to its pending section");
 
   await checkpoint("command palette navigation and sender/domain drafts");
   await browser("focus", "#mail-row-2201");
@@ -332,6 +405,17 @@ try {
   await assert(`(() => {const split=window.__splitInboxPreview.snapshot().splits.find(split=>split.id==='team');return split.domains.includes('studio.example')&&split.domains.includes('northline.example')})()`, "Adding a domain replaced existing rules");
   await browser("press", "Escape");
 
+  await checkpoint("Done on the last pending reader restores list focus");
+  await browser("wait", "#mail-row-2102");
+  await assert(`document.querySelectorAll('.imbox-panel .mail-row').length===1`, "Reading split should have one pending row left");
+  await browser("focus", "#mail-row-2102");
+  await browser("press", "Enter");
+  await browser("wait", ".thread-panel .email-body");
+  await browser("press", "e");
+  await waitFor(`!document.querySelector('.thread-panel')`);
+  await waitFor(`document.activeElement?.matches('.imbox-panel .sectioned-imbox-heading button')`);
+  await assert(`document.querySelectorAll('.imbox-panel .mail-row').length===0`, "Done reopened completed history instead of clearing the last pending item");
+
   await checkpoint("initial split failure is visible and retry refreshes membership");
   await selectSplit("all");
   await evaluate(`(() => {const mail=window.heyAgent.mail;window.__originalSplitList=mail.listSplitMail;let fail=true;mail.listSplitMail=async(...args)=>{if(fail){fail=false;throw Error('Preview offline: try again.')}return window.__originalSplitList(...args)};})()`);
@@ -359,7 +443,7 @@ try {
   await browser("screenshot", join(artifacts, "split-manager-compact.png"));
   const errors=await browser("errors");
   if (errors.trim()) throw Error(errors);
-  console.log(`PASS: cached split return without refetch; retained rows/highlight/scroll; no eager history scan; account-wide sections; sidebar/toolbar/body Tab recovery; arrows, Enter, Escape; native editor/reader/dialog focus; comma-separated rules and invalid-input recovery; preview/save and persisted labels; bulk manual split creation; reader Add to split and additive domain rules; source-preserving Done/Undo; empty-page history continuation; first-load error recovery and membership refresh; desktop and compact bounds. Screenshots: ${artifacts}`);
+  console.log(`PASS: cached split return without refetch; retained rows/highlight/scroll; no eager history scan; account-wide sections; sidebar/toolbar/body Tab recovery; arrows, Enter, Escape; native editor/reader/dialog focus; comma-separated rules and invalid-input recovery; preview/save and persisted labels; bulk manual split creation; reader Add to split and additive domain rules; Feed/Paper Trail pending Done/Undo, read-on-open retention, Escape/next Enter, overlapping split clearing, new unseen return, and physical source preservation; saved read membership and native read-mail visibility; empty-page history continuation; first-load error recovery and membership refresh; desktop and compact bounds. Screenshots: ${artifacts}`);
   }
 } catch (error) {
   const state=await evaluate(`JSON.stringify({phase:${JSON.stringify(phase)},split:${selected()},focused:document.activeElement?.outerHTML?.slice(0,500),thread:document.querySelector('.thread-panel h1')?.textContent,dialog:document.querySelector('dialog[open]')?.textContent?.slice(0,500),rows:[...document.querySelectorAll('.imbox-panel .mail-row')].map(row=>row.dataset.postingId),pages:window.__sectionedImboxPreview?.requests.filter(request=>request.options?.page)})`).catch(()=>"State unavailable after timeout.");

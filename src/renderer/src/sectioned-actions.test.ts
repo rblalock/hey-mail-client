@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ImboxPosting, ImboxResult, MailboxKey } from "../../shared/contracts";
 import { cursorAfterRemoval, sectionedActionRequests, sectionedDoneRequest } from "./sectioned-actions";
+import { groupAccountSplitMailboxes } from "./sectioned-imbox";
 
 const posting = (id: string, extra: Partial<ImboxPosting> = {}): ImboxPosting => ({ id, topicId: id, subject: id, summary: "", seen: false, createdAt: "2026-09-20T12:00:00Z", sender: { name: "Example" }, contacts: [], visibleEntryCount: 1, ...extra });
 const box = (boxKey: MailboxKey, postings: ImboxPosting[]): ImboxResult => ({ status: "ready", boxKey, boxName: boxKey, postings });
@@ -81,5 +82,14 @@ describe("sectioned Imbox actions", () => {
     ]);
     expect(sectionedActionRequests("bubble", [future], account, true)).toEqual([{ operation: "bubble-pop", postingIds: ["7"], sourceBox: "bubblebox" }]);
     expect(sectionedActionRequests("unread", [feed, trail], account, true).map((request) => request.operation)).toEqual(["unseen", "unseen"]);
+  });
+
+  it("keeps Done source-correct after opening a pending row with an older same-ID cached copy", () => {
+    const feed = posting("5");
+    const account = { imbox: box("imbox", [{ ...feed, seen: true }]), feedbox: box("feedbox", [feed]) };
+    const opened = { ...groupAccountSplitMailboxes(account).feed[0]!, seen: true };
+    expect(sectionedDoneRequest([opened], account, true)?.completion).toEqual([
+      { id: "5", sourceBox: "feedbox", seen: true, bubbledUp: false },
+    ]);
   });
 });

@@ -1,9 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HeyAgentApi, MailboxKey, MailMutationRequest, MailWatchChange } from "../../shared/contracts";
-import type { MailSplitPage } from "../../shared/mail-splits";
+import { SPLIT_MAILBOXES, type MailSplitPage } from "../../shared/mail-splits";
 import { applyOptimisticMailMutation, type MailboxCache } from "./optimistic-mail";
 
 type SourcePostingIds = Partial<Record<MailboxKey, ReadonlySet<string>>>;
+
+/** Watch payloads can update loaded rows, but cannot establish split membership. */
+export function applyWatchSeen(current: MailboxCache, change: MailWatchChange): MailboxCache {
+  if ((change.change !== "added" && change.change !== "updated") || typeof change.postingSeen !== "boolean") return current;
+  const source = change.box?.key as MailboxKey | undefined;
+  if (!source || !SPLIT_MAILBOXES.includes(source)) return current;
+  const { postingId, topicId } = change;
+  if (![postingId, topicId].some((id) => id !== undefined)
+    || [postingId, topicId].some((id) => id !== undefined && (typeof id !== "string" || !id.trim() || id !== id.trim()))) return current;
+  const mailbox = current[source];
+  if (!mailbox || mailbox.boxKey !== source) return current;
+  const seen = change.postingSeen;
+  let changed = false;
+  const postings = mailbox.postings.map((posting) => {
+    if ((postingId !== undefined && posting.id !== postingId) || (topicId !== undefined && posting.topicId !== topicId) || posting.seen === seen) return posting;
+    changed = true;
+    return { ...posting, seen };
+  });
+  return changed ? { ...current, [source]: { ...mailbox, postings } } : current;
+}
 
 export function mergeSplitPage(current: MailboxCache, page: MailSplitPage, replaceIds: ReadonlySet<string> | SourcePostingIds = new Set(), prepend = false): MailboxCache {
   const incoming = Object.values(page.mailboxes).filter((box) => box !== undefined);
@@ -110,7 +130,7 @@ export class SplitMailSession {
     const mailboxes = change.change === "deleted" && (change.postingId || change.topicId)
       ? Object.fromEntries(Object.entries(this.state.mailboxes).map(([box, result]) => [box,
         result && (!change.box || change.box.key === box) ? { ...result, postings: result.postings.filter((row) => row.id !== change.postingId && (!change.topicId || row.topicId !== change.topicId)) } : result,
-      ])) : this.state.mailboxes;
+      ])) : applyWatchSeen(this.state.mailboxes, change);
     this.update({ mailboxes, loading: false, loadingMore: false });
     this.resetScheduled ||= change.change === "resync";
     clearTimeout(this.timer);
