@@ -9,7 +9,17 @@ import { createSplitLabel } from "./split-label";
 type Context = NonNullable<ReturnType<typeof profileRequest.getStore>>;
 const BOXES = SPLIT_MAILBOXES;
 const MAX_LIST_PAGES = 6;
+const MAX_READS = 3;
+const SOURCE_TTL_MS = 30_000;
+const MAX_CACHED_PAGES = 96;
+const MAX_CACHE_BYTES = 16 * 1024 * 1024;
 type SplitCursor = { splitId: string; definition: string; sources: { box: MailboxKey; page?: string; visited: string[] }[] };
+type CachedSource = { result: ImboxResult; expires: number; bytes: number };
+
+/** Mail mutations/deferred trash handle their narrower lifecycle separately. */
+export function changesSplitSources(channel: string): boolean {
+  return /^mail:(send|send-draft|bulk-reply-send|bulk-reply-undo|unbundle-contact|update-set-aside-group|update-organization)$/.test(channel);
+}
 
 /** A runtime belongs to one immutable account context, including queued work. */
 export class SplitRuntime {
@@ -22,6 +32,12 @@ export class SplitRuntime {
   private forceScan = false;
   private error?: string;
   private cursors = new Map<string, SplitCursor>();
+  private sourceCache = new Map<string, CachedSource>();
+  private sourceReads = new Map<string, Promise<ImboxResult>>();
+  private cacheBytes = 0;
+  private generation = 0;
+  private activeReads = 0;
+  private readWaiters: (() => void)[] = [];
 
   constructor(file: string, private context: Context, private onChange: (state: MailSplitState) => void, runWrite: <T>(task: () => Promise<T>) => Promise<T>, ownEmail?: string) {
     const scoped = <T>(task: () => Promise<T>) => profileRequest.run(context, task);
@@ -53,6 +69,7 @@ export class SplitRuntime {
     this.assertRunning();
     if (!isMailSplitId(id)) throw new Error("Choose a valid split.");
     if (page !== undefined && (typeof page !== "string" || !/^[a-f0-9-]{36}$/.test(page))) throw new Error("This split page has expired. Refresh to continue.");
+    const generation = this.generation;
     const state = await this.store.listingState(id);
     this.assertRunning();
     const split = state.splits.find((item) => item.id === id)!;
@@ -62,23 +79,29 @@ export class SplitRuntime {
     const cursor: SplitCursor = saved ? structuredClone(saved) : { splitId: id, definition, sources: BOXES.map((box) => ({ box, visited: [] })) };
     const mailboxes: MailSplitPage["mailboxes"] = {};
     const observed: ImboxPosting[] = [];
-    for (let count = 0; count < MAX_LIST_PAGES && cursor.sources.length; count += 1) {
+    for (let count = 0; count < MAX_LIST_PAGES && cursor.sources.length;) {
       this.assertRunning();
-      const source = cursor.sources.shift()!;
-      const result = await this.readSource(source.box, source.page);
+      const sources = cursor.sources.splice(0, Math.min(MAX_READS, MAX_LIST_PAGES - count));
+      count += sources.length;
+      const results = await Promise.all(sources.map((source) => this.readSource(source.box, source.page)));
       this.assertRunning();
-      observed.push(...result.postings);
-      const matches = result.postings.filter((posting) => splitContainsPosting(posting, split, state.memberships, state.ownEmail));
-      const previous = mailboxes[source.box]?.postings ?? [];
-      const { nextPage: sourceNext, ...metadata } = result;
-      mailboxes[source.box] = { ...metadata, postings: [...new Map([...previous, ...matches].map((posting) => [posting.id, posting])).values()] };
-      if (sourceNext) {
-        if (sourceNext === source.page || source.visited.includes(sourceNext)) throw new Error("Split history stopped making progress. Refresh to continue.");
-        cursor.sources.push({ box: source.box, page: sourceNext, visited: [...source.visited, sourceNext] });
+      if (generation !== this.generation) throw new Error("Mail changed while loading this split. Refresh to continue.");
+      for (const [index, source] of sources.entries()) {
+        const result = results[index]!;
+        observed.push(...result.postings);
+        const matches = result.postings.filter((posting) => splitContainsPosting(posting, split, state.memberships, state.ownEmail));
+        const previous = mailboxes[source.box]?.postings ?? [];
+        const { nextPage: sourceNext, ...metadata } = result;
+        mailboxes[source.box] = { ...metadata, postings: [...new Map([...previous, ...matches].map((posting) => [posting.id, posting])).values()] };
+        if (sourceNext) {
+          if (sourceNext === source.page || source.visited.includes(sourceNext)) throw new Error("Split history stopped making progress. Refresh to continue.");
+          cursor.sources.push({ box: source.box, page: sourceNext, visited: [...source.visited, sourceNext] });
+        }
       }
     }
     const current = (await this.store.get()).splits.find((item) => item.id === id);
     this.assertRunning();
+    if (generation !== this.generation) throw new Error("Mail changed while loading this split. Refresh to continue.");
     if (JSON.stringify(current) !== definition) throw new Error("This split changed. Refresh to continue.");
     let nextPage: string | undefined;
     if (cursor.sources.length) {
@@ -108,6 +131,7 @@ export class SplitRuntime {
 
   async refresh(force = false): Promise<void> {
     if (this.stopped) return;
+    if (force) this.invalidate();
     this.forceScan ||= force;
     if (this.scan) return this.scan;
     this.scan = (async () => {
@@ -145,7 +169,7 @@ export class SplitRuntime {
     this.store.forget();
     // A preview may already be reading. A watch-triggered refresh must not reuse
     // that pre-change snapshot merely because the read has not finished yet.
-    this.snapshotRead = undefined;
+    this.invalidate();
     if (this.scan) { this.scanAgain = true; return; }
     if (this.timer) return;
     this.timer = setTimeout(() => { this.timer = undefined; void this.refresh(); }, 1000);
@@ -155,14 +179,9 @@ export class SplitRuntime {
     if (this.stopped) return Promise.reject(new Error("This account is no longer active."));
     if (this.snapshotRead) return this.snapshotRead;
     const reading = (async () => {
-      const postings: ImboxPosting[] = [];
-      for (const box of BOXES) {
-        if (this.stopped) throw new Error("This account is no longer active.");
-        const result = await this.readSource(box);
-        postings.push(...result.postings);
-      }
+      const results = await Promise.all(BOXES.map((box) => this.readSource(box)));
       if (this.stopped) throw new Error("This account is no longer active.");
-      return postings;
+      return results.flatMap((result) => result.postings);
     })().catch((cause: unknown) => {
       throw new Error(this.stopped ? "This account is no longer active." : "Could not check all six mailboxes. Refresh and try again.", { cause });
     }).finally(() => { if (this.snapshotRead === reading) this.snapshotRead = undefined; });
@@ -174,18 +193,67 @@ export class SplitRuntime {
     if (this.stopped) throw new Error("This account is no longer active.");
   }
 
-  private async readSource(box: MailboxKey, page?: string): Promise<ImboxResult> {
+  /** In-flight reads may finish, but must never repopulate a post-change cache. */
+  invalidate(): void {
+    this.generation += 1;
+    this.sourceCache.clear();
+    this.cacheBytes = 0;
+    this.sourceReads.clear();
+    this.snapshotRead = undefined;
+    if (this.scan) this.scanAgain = true;
+  }
+
+  private readSource(box: MailboxKey, page?: string): Promise<ImboxResult> {
     this.assertRunning();
-    try {
-      const result = await profileRequest.run(this.context, () => listMailbox(box, this.context.env, { paginated: true, singlePage: true, ...(page ? { page } : {}) }));
+    const key = JSON.stringify([box, page ?? null]);
+    const cached = this.sourceCache.get(key);
+    if (cached && cached.expires > Date.now()) {
+      this.sourceCache.delete(key);
+      this.sourceCache.set(key, cached);
+      return Promise.resolve(structuredClone(cached.result));
+    }
+    if (cached) { this.sourceCache.delete(key); this.cacheBytes -= cached.bytes; }
+    const pending = this.sourceReads.get(key);
+    if (pending) return pending.then((result) => structuredClone(result));
+    const generation = this.generation;
+    const reading = this.withReadSlot(async () => {
       this.assertRunning();
-      if (result.status !== "ready") throw new Error("Mailbox unavailable.");
-      return result;
-    } catch {
-      this.assertRunning();
-      throw new Error("Could not check all six mailboxes. Refresh and try again.");
+      try {
+        const result = await profileRequest.run(this.context, () => listMailbox(box, this.context.env, { paginated: true, singlePage: true, ...(page ? { page } : {}) }));
+        this.assertRunning();
+        if (result.status !== "ready") throw new Error("Mailbox unavailable.");
+        if (generation === this.generation) {
+          const bytes = Buffer.byteLength(JSON.stringify(result));
+          if (bytes <= MAX_CACHE_BYTES) {
+            this.sourceCache.set(key, { result: structuredClone(result), expires: Date.now() + SOURCE_TTL_MS, bytes });
+            this.cacheBytes += bytes;
+            while (this.sourceCache.size > MAX_CACHED_PAGES || this.cacheBytes > MAX_CACHE_BYTES) {
+              const oldest = this.sourceCache.keys().next().value!;
+              this.cacheBytes -= this.sourceCache.get(oldest)!.bytes;
+              this.sourceCache.delete(oldest);
+            }
+          }
+        }
+        return result;
+      } catch {
+        this.assertRunning();
+        throw new Error("Could not check all six mailboxes. Refresh and try again.");
+      }
+    }).finally(() => { if (this.sourceReads.get(key) === reading) this.sourceReads.delete(key); });
+    this.sourceReads.set(key, reading);
+    return reading.then((result) => structuredClone(result));
+  }
+
+  private async withReadSlot<T>(read: () => Promise<T>): Promise<T> {
+    if (this.activeReads >= MAX_READS) await new Promise<void>((resolve) => this.readWaiters.push(resolve));
+    else this.activeReads += 1;
+    try { return await read(); }
+    finally {
+      const next = this.readWaiters.shift();
+      if (next) next();
+      else this.activeReads -= 1;
     }
   }
 
-  stop(): void { this.stopped = true; clearTimeout(this.timer); this.cursors.clear(); this.store.stop(); }
+  stop(): void { this.stopped = true; clearTimeout(this.timer); this.invalidate(); this.cursors.clear(); this.store.stop(); }
 }

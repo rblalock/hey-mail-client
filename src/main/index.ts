@@ -40,7 +40,7 @@ import { HeyAccountScope } from "../../resources/hey-account-scope.mjs";
 import { listLibraryThreads } from "./hey";
 import { DeferredTrash } from "../shared/deferred-trash";
 import { acknowledgeHeyWrites, pendingHeyWrites } from "../../resources/hey-write-receipts.mjs";
-import { SplitRuntime } from "./split-runtime";
+import { changesSplitSources, SplitRuntime } from "./split-runtime";
 
 process.env.PATH = desktopRuntimePath();
 const paths = resolveAppPaths();
@@ -124,8 +124,8 @@ function bindProfile(): void {
     // requests from before this event cannot repopulate the disk cache.
     if (change.topicId) void mailDiskCache.remove(profile, change.topicId).catch(() => undefined);
     else if (change.change === "resync" || change.change === "deleted") void mailDiskCache.clearProfile(profile).catch(() => undefined);
-    mainWindow?.webContents.send("mail:changed", change);
     if (!change.box || ["imbox", "feedbox", "trailbox", "asidebox", "laterbox", "bubblebox"].includes(change.box.key)) splitRuntime?.schedule();
+    mainWindow?.webContents.send("mail:changed", change);
   }, env);
   void heyWatcher.start();
 }
@@ -148,6 +148,10 @@ function handle(channel: string, action: (event: IpcMainInvokeEvent, ...args: un
     if (switchingProfile) throw new Error("An account switch is in progress.");
     const readOnly = /^(mail:(list-|get-|read-|show-|search|reply-context|bulk-reply-preview)|calendar:(list|search|habits:list|todos:list|journal:(list|read)|time:(list|current|categories))|agent:(get-workspace|list-chats))/.test(channel);
     if (!readOnly) pendingWrites++;
+    // Capture the account runtime before awaiting a write. A transport failure
+    // may still have committed, so refresh its sources on both outcomes.
+    const sourceRuntime = changesSplitSources(channel) ? splitRuntime : undefined;
+    sourceRuntime?.invalidate();
     try {
       const result = await profileRequest.run(accountContext, () => action(event, ...args));
       if (/^mail:(send|send-draft|bulk-reply-send|bulk-reply-undo)$/.test(channel)) {
@@ -155,7 +159,7 @@ function handle(channel: string, action: (event: IpcMainInvokeEvent, ...args: un
       }
       profiles.assertToken(token);
       return result;
-    } finally { if (!readOnly) pendingWrites--; }
+    } finally { sourceRuntime?.schedule(); if (!readOnly) pendingWrites--; }
   });
 }
 
@@ -211,11 +215,21 @@ function registerIpc(): void {
     await splitRuntime!.store.remove(id); return splitRuntime!.get();
   });
   handle("mail:preview-split", async (_event, draft) => splitRuntime!.preview(draft));
-  handle("mail:list-split-mail", (_event, id, page) => splitRuntime!.listMail(id, page));
+  handle("mail:list-split-mail", (_event, id, page, options) => {
+    if (options !== undefined && (!options || typeof options !== "object" || Array.isArray(options)
+      || Object.keys(options).some((key) => key !== "refresh")
+      || "refresh" in options && options.refresh !== undefined && typeof options.refresh !== "boolean")) throw new Error("Invalid split refresh options.");
+    if (options && "refresh" in options && options.refresh) {
+      if (page !== undefined) throw new Error("Refresh the split before loading older mail.");
+      splitRuntime!.invalidate();
+    }
+    return splitRuntime!.listMail(id, page);
+  });
   handle("mail:add-to-split", (_event, request) => splitRuntime!.addToSplit(request));
   handle("mail:refresh-splits", async () => {
     const runtime = splitRuntime!;
-    await runtime.store.refreshMemberships(); await runtime.refresh(true); return runtime.get();
+    runtime.invalidate();
+    await runtime.store.refreshMemberships(); await runtime.refresh(); return runtime.get();
   });
   handle("mail:list-mailbox", async (_event, box, options) => {
     if (typeof box !== "string") throw new Error("A HEY mailbox is required.");
@@ -233,9 +247,15 @@ function registerIpc(): void {
     if (!isOrganizationTarget(target)) throw new Error("Invalid HEY conversation organization target.");
     return getMailOrganization(target);
   });
-  handle("mail:update-organization", (_event, request) => {
+  handle("mail:update-organization", async (_event, request) => {
     if (!isOrganizationMutation(request)) throw new Error("Invalid HEY conversation organization action.");
-    return updateMailOrganization(request);
+    const runtime = splitRuntime;
+    try { return await updateMailOrganization(request); }
+    finally {
+      // Label filing also changes manual split membership. Reconcile separately
+      // so unrelated label synchronization does not hold the organizer open.
+      if (request.kind === "labels") void runtime?.store.refreshMemberships().catch(() => undefined);
+    }
   });
   handle("mail:list-screener", () => listScreener());
   handle("mail:get-overview", () => getMailOverview());
@@ -300,9 +320,9 @@ function registerIpc(): void {
   handle("mail:mutate", async (_event, request) => {
     if (!isMailMutation(request)) throw new Error("Invalid HEY mail action.");
     const runtime = splitRuntime;
+    runtime?.invalidate();
     runtime?.store.forget(request.postingIds);
-    const result = await mutateMail(request);
-    runtime?.schedule();
+    const result = await mutateMail(request).finally(() => runtime?.schedule());
     if (request.operation === "trash" || request.operation === "spam") await mailDiskCache.clearProfile(profiles.state.active!).catch(() => undefined);
     return result;
   });
@@ -312,9 +332,9 @@ function registerIpc(): void {
     const profile = profiles.state.active!;
     const runtime = splitRuntime;
     return deferredTrash.enqueue(trashId(id), profiles.state.token, async () => {
+      runtime?.invalidate();
       runtime?.store.forget(request.postingIds);
-      const result = await profileRequest.run(context, () => mutateMail(request));
-      runtime?.schedule();
+      const result = await profileRequest.run(context, () => mutateMail(request)).finally(() => runtime?.schedule());
       await mailDiskCache.clearProfile(profile).catch(() => undefined);
       return result;
     });

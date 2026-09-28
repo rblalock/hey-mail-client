@@ -1,9 +1,9 @@
 import { ArrowUpCircle, BellOff, Check, ChevronDown, Circle, Clock3, Eye, EyeOff, FileClock, FolderKanban, FolderPlus, Inbox, Layers3, MoreHorizontal, Newspaper, RefreshCw, Reply, Rows3, Search, Sparkles, Tag, ThumbsDown, ThumbsUp, Trash2, Ungroup } from "lucide-react";
-import { Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { activateMailRow } from "../mail-row-keyboard";
 import { Bell } from "lucide-react";
 import type { ImboxPosting, ImboxResult, MailboxKey, MailOrganizationKind, MailOverview, SetAsideGroupMutationRequest } from "../../../shared/contracts";
-import type { ShortcutId } from "../shortcuts";
+import { matchesShortcut, shortcutById, type ShortcutId } from "../shortcuts";
 import { appSound } from "../sound";
 import { groupImboxPostings } from "../mailbox-navigation";
 import { ACCOUNT_SPLIT_SECTION_ORDER, groupAccountSplitMailboxes, groupSectionedImbox, IMBOX_SECTION_ORDER, PREVIOUSLY_SEEN_BATCH, SECTION_MAILBOX, sectionedSelectionSource, type AccountSplitMailboxes, type AccountSplitSectionKey, type SectionedMailboxes } from "../sectioned-imbox";
@@ -14,6 +14,7 @@ import ContactAvatar from "./ContactAvatar";
 import { enrichContactAvatar } from "../contact-avatar";
 import { addressedContacts, contactDetails, contactLabel, currentMailEmail, isOwnMail } from "../mail-presentation";
 import { ShortcutContext, useShortcutHints } from "../shortcut-context";
+import { SplitHistoryIntent, type MailListViewState } from "../mail-list-view-state";
 
 type ImboxViewProps = {
   mailboxKey: MailboxKey;
@@ -57,6 +58,7 @@ type ImboxViewProps = {
   onAddToSplit?: (postingIds: string[]) => void;
   pagingPaused?: boolean;
   initialHistoryCollapsed?: boolean;
+  viewState?: MailListViewState;
 };
 
 const sectionTitles: Record<AccountSplitSectionKey, string> = { active: "Active", replyLater: "Reply Later", setAside: "Set Aside", bubbledUp: "Bubbled Up", previouslySeen: "Previously Seen", feed: "The Feed", paperTrail: "Paper Trail", scheduledBubbleUp: "Scheduled Bubble Up" };
@@ -119,9 +121,10 @@ function MailRow({ posting, selectedId, bulkSelected, imbox, dayGrouped, showSen
   </button>;
 }
 
-export default function ImboxView({ mailboxKey, result, overview, loading, searchRequest, focusSection = "new", focusSectionRequest = 0, selectedId, bulkSelectedIds, bulkBusy, commandPaletteOpen, onSelect, onHighlight, onToggleSelection, onBulkAction, helperActions = [], onReadTogether, onReplyTogether, onOrganizeSelection, onClearSelection, onRefresh, onNavigate, setAsideGroupTarget, onSetAsideGroup, hidden = false, showSenderAvatars = false, sectioned = false, accountSplit = false, sectionMailboxes, retainedActiveId, onLayoutChange, onVisiblePostingsChange, onLoadMore, loadingMore = false, loadMoreError, profileKey = "default", splitTabs, onManageSplits, onAddToSplit, pagingPaused = false, initialHistoryCollapsed = false }: ImboxViewProps) {
+export default function ImboxView({ mailboxKey, result, overview, loading, searchRequest, focusSection = "new", focusSectionRequest = 0, selectedId, bulkSelectedIds, bulkBusy, commandPaletteOpen, onSelect, onHighlight, onToggleSelection, onBulkAction, helperActions = [], onReadTogether, onReplyTogether, onOrganizeSelection, onClearSelection, onRefresh, onNavigate, setAsideGroupTarget, onSetAsideGroup, hidden = false, showSenderAvatars = false, sectioned = false, accountSplit = false, sectionMailboxes, retainedActiveId, onLayoutChange, onVisiblePostingsChange, onLoadMore, loadingMore = false, loadMoreError, profileKey = "default", splitTabs, onManageSplits, onAddToSplit, pagingPaused = false, initialHistoryCollapsed = false, viewState }: ImboxViewProps) {
   const hint = useShortcutHints();
-  const [query, setQuery] = useState("");
+  const shortcuts = useContext(ShortcutContext);
+  const [query, setQuery] = useState(viewState?.query ?? "");
   const [bulkMenuOpen, setBulkMenuOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const previousRef = useRef<HTMLDivElement>(null);
@@ -132,9 +135,15 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   const lastLocalReveal = useRef<string | undefined>(undefined);
   const lastVisibleSequence = useRef<string | undefined>(undefined);
   const lastSectionFocus = useRef<string | undefined>(undefined);
+  const restoringView = useRef(Boolean(viewState?.initialized));
+  const skipInitialRowScroll = useRef(Boolean(viewState?.initialized));
+  const splitHistoryIntent = useRef(new SplitHistoryIntent());
+  const lastScrollTop = useRef(0);
+  const scrollbarDragging = useRef(false);
+  const touchY = useRef<number | undefined>(undefined);
   const [collapseState, setCollapseState] = useState(() => ({ profileKey, keys: readCollapsedSections(profileKey, initialHistoryCollapsed) }));
   const collapsed = useMemo(() => collapseState.profileKey === profileKey ? collapseState.keys : readCollapsedSections(profileKey, initialHistoryCollapsed), [collapseState, profileKey, initialHistoryCollapsed]);
-  const [seenBatch, setSeenBatch] = useState({ profileKey, count: PREVIOUSLY_SEEN_BATCH });
+  const [seenBatch, setSeenBatch] = useState({ profileKey, count: Math.max(PREVIOUSLY_SEEN_BATCH, viewState?.seenLimit ?? 0) });
   const seenLimit = seenBatch.profileKey === profileKey ? seenBatch.count : PREVIOUSLY_SEEN_BATCH;
   const isImbox = result?.boxKey === "imbox";
   const useSectioned = accountSplit || sectioned && mailboxKey === "imbox";
@@ -157,7 +166,9 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   const dayHeaders = dayGrouped ? mailDayHeaders(postings) : new Map<string, string>();
   const showSections = !useSectioned && isImbox && result?.status === "ready" && !query.trim() && postings.length > 0;
   const showSectioned = useSectioned && result?.status === "ready";
+  const hasRestorableList = accountSplit ? Object.keys(sectionMailboxes ?? {}).length > 0 : Boolean(result);
   const visibleSections = useMemo(() => Object.fromEntries(sectionOrder.map((key) => [key, collapsed.includes(key) ? [] : key === "previouslySeen" && !query.trim() ? sectionedGroups[key].slice(0, seenLimit) : sectionedGroups[key]])) as AccountSplitMailboxes, [collapsed, sectionedGroups, seenLimit, query, sectionOrder]);
+  const visibleIds = useMemo(() => sectionOrder.flatMap((key) => visibleSections[key].map((posting) => posting.id)), [sectionOrder, visibleSections]);
   const activeRowVisible = !hidden && selectedId && (useSectioned
     ? showSectioned && sectionOrder.some((key) => visibleSections[key].some((posting) => posting.id === selectedId))
     : postings.some((posting) => posting.id === selectedId));
@@ -179,6 +190,7 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   const emptyCopy = mailboxEmptyCopy(result?.boxName ?? "Mailbox", isImbox, Boolean(query));
 
   const toggleSection = (key: AccountSplitSectionKey) => {
+    splitHistoryIntent.current.cancel();
     const keys = collapsed.includes(key) ? collapsed.filter((value) => value !== key) : [...collapsed, key];
     setCollapseState({ profileKey, keys });
     try { window.localStorage.setItem(collapseStorageKey(profileKey), JSON.stringify(keys)); } catch { /* A storage restriction must not prevent collapsing a section. */ }
@@ -190,10 +202,39 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
     const request = local ? lastLocalReveal : lastPageRequest;
     if (request.current === requestKey) return;
     if (!local && !onLoadMore) return;
+    if (!local && accountSplit && !splitHistoryIntent.current.consume(visibleIds)) return;
     request.current = requestKey;
     if (local) setSeenBatch({ profileKey, count: seenLimit + PREVIOUSLY_SEEN_BATCH });
     else onLoadMore?.();
-  }, [pagingAllowed, loadingMore, loadMoreError, hasOlder, hasLocalHistory, seenLimit, profileKey, result?.nextPage, onLoadMore]);
+  }, [pagingAllowed, loadingMore, loadMoreError, hasOlder, hasLocalHistory, seenLimit, profileKey, result?.nextPage, onLoadMore, accountSplit, visibleIds]);
+  const forwardScrollIntent = () => {
+    if (!accountSplit || !pagingAllowed || loadingMore || loadMoreError) return;
+    splitHistoryIntent.current.begin(visibleIds);
+    const list = mailList.current;
+    if (list && list.scrollHeight - list.scrollTop - list.clientHeight < 160) revealOlder();
+  };
+  useLayoutEffect(() => {
+    const list = mailList.current;
+    if (!viewState || !list || hidden || restoringView.current && (loading || !hasRestorableList)) return;
+    if (restoringView.current) {
+      list.scrollTop = viewState.scrollTop;
+      lastScrollTop.current = list.scrollTop;
+      restoringView.current = false;
+    }
+    viewState.initialized = true;
+    viewState.seenLimit = seenLimit;
+    viewState.query = query;
+  }, [viewState, hidden, loading, hasRestorableList, seenLimit, query]);
+  useEffect(() => {
+    if (pagingPaused || loadMoreError || query.trim() || hidden) splitHistoryIntent.current.cancel();
+  }, [pagingPaused, loadMoreError, query, hidden]);
+  useEffect(() => {
+    if (!accountSplit) return;
+    const stopDragging = () => { scrollbarDragging.current = false; };
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
+    return () => { window.removeEventListener("pointerup", stopDragging); window.removeEventListener("pointercancel", stopDragging); };
+  }, [accountSplit]);
   useEffect(() => {
     if (!showSectioned) { lastVisibleSequence.current = undefined; return; }
     if (hidden || !onVisiblePostingsChange) return;
@@ -246,6 +287,8 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   }, [focusSection, focusSectionRequest, isImbox, useSectioned, showSectioned, profileKey, collapsed]);
   useEffect(() => {
     if (!selectedId || hidden) return;
+    if (skipInitialRowScroll.current) { skipInitialRowScroll.current = false; return; }
+    if (restoringView.current) return;
     const row = document.getElementById(`mail-row-${selectedId}`);
     // Escape returns focus to a row. Keep native Enter/Space on the same row
     // as J/K, arrow-key and range-selection navigation, without stealing focus
@@ -326,11 +369,30 @@ export default function ImboxView({ mailboxKey, result, overview, loading, searc
   return <section className="panel imbox-panel" aria-label={result?.boxName ?? "Mail"} hidden={hidden} data-layout={useSectioned ? "sectioned" : "hey"}>
     <header className="panel-header imbox-titlebar">
       <div className="title-cluster"><h1>{result?.boxName ?? "Mail"}</h1>{!isImbox && <span className="title-count">{result?.postings.length ?? 0}</span>}</div>
-      <div className="imbox-header-tools"><label className="mail-search" data-tooltip={`Search ${result?.boxName ?? "mail"}`}><Search size={15} /><input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${result?.boxName ?? "mail"}`} /></label></div>
+      <div className="imbox-header-tools"><label className="mail-search" data-tooltip={`Search ${result?.boxName ?? "mail"}`}><Search size={15} /><input ref={searchRef} value={query} onChange={(event) => { splitHistoryIntent.current.cancel(); setQuery(event.target.value); }} placeholder={`Search ${result?.boxName ?? "mail"}`} /></label></div>
       <div className="header-actions">{mailboxKey === "imbox" && onManageSplits && !splitTabs && <button type="button" className="toolbar-button" onClick={onManageSplits}>Splits</button>}{!accountSplit && mailboxKey === "imbox" && onLayoutChange && <div className="imbox-layout-switch" role="group" aria-label="Imbox layout"><button type="button" aria-pressed={!useSectioned} onClick={() => onLayoutChange("hey")}>HEY</button><button type="button" aria-pressed={useSectioned} onClick={() => onLayoutChange("sectioned")}>Sectioned</button></div>}<button className="icon-button" type="button" aria-label={`Refresh ${result?.boxName ?? "mail"}`} data-tooltip={`Refresh ${result?.boxName ?? "mail"}`} onClick={onRefresh} disabled={loading}><RefreshCw size={15} className={loading ? "is-spinning" : ""} /></button></div>
     </header>
     {splitTabs}
-    <div ref={mailList} className="mail-list" data-imbox={isImbox} data-split-navigation="surface" tabIndex={-1} role="listbox" aria-label={`${result?.boxName ?? "Mail"} conversations`} aria-activedescendant={activeRowVisible ? `mail-row-${selectedId}` : undefined} onScroll={(event) => { const list = event.currentTarget; if (list.scrollHeight - list.scrollTop - list.clientHeight < 160) revealOlder(); }}>
+    <div ref={mailList} className="mail-list" data-imbox={isImbox} data-split-navigation="surface" tabIndex={-1} role="listbox" aria-label={`${result?.boxName ?? "Mail"} conversations`} aria-activedescendant={activeRowVisible ? `mail-row-${selectedId}` : undefined}
+      onWheel={(event) => { if (event.deltaY > 0) forwardScrollIntent(); else if (event.deltaY < 0) splitHistoryIntent.current.cancel(); }}
+      onTouchStart={(event) => { touchY.current = event.touches[0]?.clientY; }}
+      onTouchMove={(event) => { const next = event.touches[0]?.clientY; if (next !== undefined && touchY.current !== undefined && next < touchY.current) forwardScrollIntent(); touchY.current = next; }}
+      onPointerDown={(event) => { scrollbarDragging.current = event.target === event.currentTarget; }}
+      onKeyDownCapture={(event) => {
+        if (!accountSplit || !(event.target instanceof Element) || !event.target.matches(".mail-list, .mail-row")) return;
+        const forward = ["next", "select-next"].some((id) => matchesShortcut(event.nativeEvent, shortcutById(shortcuts, id as ShortcutId)));
+        const backward = ["previous", "select-previous"].some((id) => matchesShortcut(event.nativeEvent, shortcutById(shortcuts, id as ShortcutId)));
+        if (forward || !event.ctrlKey && !event.metaKey && !event.altKey && ["PageDown", "End"].includes(event.key)) forwardScrollIntent();
+        else if (backward || ["PageUp", "Home"].includes(event.key)) splitHistoryIntent.current.cancel();
+      }}
+      onScroll={(event) => {
+        const list = event.currentTarget;
+        if (hidden || restoringView.current) return;
+        if (viewState) viewState.scrollTop = list.scrollTop;
+        if (scrollbarDragging.current && list.scrollTop > lastScrollTop.current) forwardScrollIntent();
+        lastScrollTop.current = list.scrollTop;
+        if (list.scrollHeight - list.scrollTop - list.clientHeight < 160) revealOlder();
+      }}>
       {loading && !result && <div className="loading-list">{Array.from({ length: 7 }, (_, index) => <div className="loading-row" key={index} />)}</div>}
       {!loading && result?.status !== "ready" && <div className="empty-state"><span className="empty-mark"><Circle size={18} /></span><h2>{result?.status === "needs-auth" ? "HEY needs your sign-in" : "Mailbox unavailable"}</h2><p>{result?.detail ?? "Check the local HEY CLI and try again."}</p><button type="button" className="primary-button" onClick={onRefresh}>Try again</button></div>}
 

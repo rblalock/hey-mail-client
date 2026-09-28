@@ -930,7 +930,7 @@ export type HeyAgentApi = {
     removeSplit(id: string): Promise<MailSplitState>;
     previewSplit(draft: MailSplitDraft): Promise<MailSplitPreview>;
     refreshSplits(): Promise<MailSplitState>;
-    listSplitMail(id: string, page?: string): Promise<MailSplitPage>;
+    listSplitMail(id: string, page?: string, options?: { refresh?: boolean }): Promise<MailSplitPage>;
     addToSplit(request: AddToSplitRequest): Promise<MailSplitState>;
     subscribeSplits(listener: (state: MailSplitState) => void): () => void;
     listImbox(): Promise<ImboxResult>;

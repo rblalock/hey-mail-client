@@ -120,6 +120,23 @@ describe("Imbox section presentation", () => {
     expect($("button").filter((_, e) => /load more/i.test($(e).text()))).toHaveLength(0);
   });
 
+  it("restores the previously revealed history batch when revisiting a split", () => {
+    const result = imbox(Array.from({ length: 90 }, (_, index) => row(`seen-${index}`, true)));
+    const viewState = { scrollTop: 900, seenLimit: 75, initialized: true, highlightedId: "seen-60" };
+    const $ = render(result, false, [], { accountSplit: true, sectionMailboxes: { imbox: result }, viewState, selectedId: viewState.highlightedId });
+    expect($(".mail-row")).toHaveLength(75);
+    expect($(".mail-list").attr("aria-activedescendant")).toBe("mail-row-seen-60");
+    expect(render(result, false, [], { accountSplit: true, sectionMailboxes: { imbox: result } })(".mail-row")).toHaveLength(25);
+  });
+
+  it("restores a split's search along with its list state", () => {
+    const result = imbox([row("matching", false), row("other", false)]);
+    const $ = render(result, false, [], { accountSplit: true, sectionMailboxes: { imbox: result }, viewState: { scrollTop: 0, seenLimit: 25, query: "matching", initialized: true } });
+    expect($(".mail-search input").attr("value")).toBe("matching");
+    expect($(".mail-row").map((_, element) => $(element).attr("data-posting-id")).get()).toEqual(["matching"]);
+    expect($(".sectioned-imbox-sentinel")).toHaveLength(0);
+  });
+
   it("keeps Active and Bubbled Up counts complete when older history has another page", () => {
     const $ = render({ ...imbox([row("active", false), row("due", false, true), row("seen", true)]), nextPage: "2" }, false, [], { sectioned: true });
     expect($("[data-section=active] .sectioned-imbox-heading em").text()).toBe("1");

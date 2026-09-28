@@ -8,7 +8,7 @@ import { SPLIT_MAILBOXES } from "../shared/mail-splits";
 import { listLibrary, listLibraryThreads, listMailbox, updateMailOrganization } from "./hey";
 import { profileRequest } from "./profile-process";
 import { createSplitLabel } from "./split-label";
-import { SplitRuntime } from "./split-runtime";
+import { changesSplitSources, SplitRuntime } from "./split-runtime";
 
 vi.mock("./hey", () => ({ listLibrary: vi.fn(), listLibraryThreads: vi.fn(), listMailbox: vi.fn(), updateMailOrganization: vi.fn() }));
 vi.mock("./split-label", () => ({ createSplitLabel: vi.fn() }));
@@ -49,6 +49,7 @@ beforeEach(() => {
 afterEach(async () => {
   runtimes.splice(0).forEach((runtime) => runtime.stop());
   vi.useRealTimers();
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -111,6 +112,7 @@ describe("split runtime snapshots", () => {
     const { runtime } = await fixture();
     expect((await runtime.preview(draft)).count).toBe(1);
     vi.mocked(listMailbox).mockImplementation(async (name) => name === "asidebox" ? { ...box(name), status: "unavailable", detail: "secret output" } : box(name, [row()]));
+    runtime.invalidate();
     await expect(runtime.preview(draft)).rejects.toThrow("Could not check");
     await runtime.refresh();
     expect((await runtime.get()).errors._sync).toContain("Could not check");
@@ -124,7 +126,7 @@ describe("split runtime snapshots", () => {
     await runtime.refresh();
     expect((await runtime.store.preview(draft)).count).toBe(1);
     vi.mocked(listMailbox).mockImplementation(async (name) => box(name));
-    await runtime.refresh();
+    await runtime.refresh(true);
     expect((await runtime.store.preview(draft)).count).toBe(0);
     await runtime.store.save({ ...draft, labelId: undefined, name: "Second", labelName: "Second" });
     await runtime.store.idle();
@@ -141,7 +143,7 @@ describe("split runtime snapshots", () => {
     });
     const one = runtime.refresh();
     await entered.promise;
-    const two = runtime.refresh(true);
+    const two = runtime.refresh();
     first.resolve(box("imbox", [row()]));
     await Promise.all([one, two]);
     expect(listMailbox).toHaveBeenCalledTimes(6);
@@ -197,7 +199,7 @@ describe("split runtime snapshots", () => {
     const notifications = onChange.mock.calls.length;
     first.resolve(box("imbox", [row()]));
     await refresh;
-    expect(listMailbox).toHaveBeenCalledTimes(1);
+    expect(listMailbox).toHaveBeenCalledTimes(3);
     expect(updateMailOrganization).not.toHaveBeenCalled();
     expect(onChange).toHaveBeenCalledTimes(notifications);
     await expect(runtime.preview(draft)).rejects.toThrow("no longer active");
@@ -281,7 +283,146 @@ describe("account-wide split pages", () => {
     runtime.stop();
     first.resolve(box("imbox", [row()]));
     await expect(listing).rejects.toThrow("no longer active");
-    expect(listMailbox).toHaveBeenCalledTimes(1);
+    expect(listMailbox).toHaveBeenCalledTimes(3);
     expect(updateMailOrganization).not.toHaveBeenCalled();
+  });
+});
+
+describe("shared split source cache", () => {
+  it.each(["send", "send-draft", "bulk-reply-send", "bulk-reply-undo", "unbundle-contact", "update-set-aside-group", "update-organization"])("invalidates split sources for %s", (command) => {
+    expect(changesSplitSources(`mail:${command}`)).toBe(true);
+  });
+
+  it.each(["edit-draft", "delete-draft", "list-drafts", "show-draft", "bulk-reply-preview", "list-split-mail", "preview-split", "get-splits", "select-attachments", "paste-attachments"])("does not invalidate sources for draft-only/readonly/composer command %s", (command) => {
+    expect(changesSplitSources(`mail:${command}`)).toBe(false);
+  });
+
+  it("reuses six heads across split changes and previews without aliasing returned rows", async () => {
+    const { runtime } = await fixture();
+    const saved = await runtime.store.save({ ...draft, enabled: false, name: "Friends" });
+    await runtime.store.idle();
+    const [one, two] = saved.splits;
+    const result = await runtime.listMail(one!.id);
+    result.mailboxes.imbox!.postings[0]!.subject = "Changed only in caller";
+    expect((await runtime.listMail(two!.id)).mailboxes.imbox?.postings[0]?.subject).toBe("Fictional subject");
+    await runtime.preview(draft);
+    await runtime.listMail(one!.id);
+    expect(listMailbox).toHaveBeenCalledTimes(6);
+  });
+
+  it("deduplicates concurrent snapshot and list reads with at most three CLI requests running", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    const pending: { name: MailboxKey; done: ReturnType<typeof deferred<ImboxResult>> }[] = [];
+    let active = 0;
+    let peak = 0;
+    vi.mocked(listMailbox).mockImplementation(async (name) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      const done = deferred<ImboxResult>();
+      pending.push({ name, done });
+      try { return await done.promise; } finally { active -= 1; }
+    });
+    const preview = runtime.preview(draft);
+    const listing = runtime.listMail(id);
+    await vi.waitFor(() => expect(pending).toHaveLength(3));
+    for (const item of pending.slice(0, 3)) item.done.resolve(box(item.name));
+    await vi.waitFor(() => expect(pending).toHaveLength(6));
+    for (const item of pending.slice(3)) item.done.resolve(box(item.name));
+    await Promise.all([preview, listing]);
+    expect(listMailbox).toHaveBeenCalledTimes(6);
+    expect(peak).toBe(3);
+  });
+
+  it("expires source pages after thirty seconds and keeps the cache account-owned", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    await runtime.listMail(id);
+    now.mockReturnValue(129_999);
+    await runtime.listMail(id);
+    expect(listMailbox).toHaveBeenCalledTimes(6);
+    now.mockReturnValue(130_000);
+    await runtime.listMail(id);
+    expect(listMailbox).toHaveBeenCalledTimes(12);
+    const second = await fixture();
+    await second.runtime.listMail((await second.runtime.get()).splits[0]!.id);
+    expect(listMailbox).toHaveBeenCalledTimes(18);
+  });
+
+  it("shares older source pages across splits and evicts least recently used pages at its bound", async () => {
+    const { runtime } = await fixture();
+    const state = await runtime.store.save({ ...draft, enabled: false, name: "Friends" });
+    await runtime.store.idle();
+    const [one, two] = state.splits;
+    vi.mocked(listMailbox).mockImplementation(async (name, _env, options) => ({ ...box(name), nextPage: String(Number(options?.page ?? "0") + 1) }));
+    const first = await runtime.listMail(one!.id);
+    const second = await runtime.listMail(two!.id);
+    await runtime.listMail(two!.id, second.nextPage);
+    await runtime.listMail(one!.id, first.nextPage);
+    expect(listMailbox).toHaveBeenCalledTimes(12);
+    let page = first.nextPage;
+    for (let index = 1; index <= 16; index += 1) page = (await runtime.listMail(one!.id, page)).nextPage;
+    expect(listMailbox).toHaveBeenCalledTimes(102);
+    await runtime.listMail(one!.id);
+    expect(listMailbox).toHaveBeenCalledTimes(108);
+  });
+
+  it("invalidates cached heads after watch/mutation scheduling and on explicit refresh", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    await runtime.listMail(id);
+    vi.mocked(listMailbox).mockImplementation(async (name) => box(name));
+    runtime.schedule();
+    expect((await runtime.listMail(id)).mailboxes.imbox?.postings).toEqual([]);
+    expect(listMailbox).toHaveBeenCalledTimes(12);
+    await runtime.refresh(true);
+    expect(listMailbox).toHaveBeenCalledTimes(18);
+    await runtime.listMail(id);
+    expect(listMailbox).toHaveBeenCalledTimes(18);
+  });
+
+  it("never repopulates the cache or observes stale list results after invalidation during a read", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    const pending: { name: MailboxKey; done: ReturnType<typeof deferred<ImboxResult>> }[] = [];
+    vi.mocked(listMailbox).mockImplementation(async (name) => {
+      const done = deferred<ImboxResult>();
+      pending.push({ name, done });
+      return done.promise;
+    });
+    const stale = runtime.listMail(id);
+    const rejected = expect(stale).rejects.toThrow("Mail changed");
+    await vi.waitFor(() => expect(pending).toHaveLength(3));
+    runtime.invalidate();
+    vi.mocked(listMailbox).mockImplementation(async (name) => box(name));
+    const fresh = runtime.listMail(id);
+    for (const item of pending) item.done.resolve(box(item.name, [row()]));
+    await rejected;
+    expect(Object.values((await fresh).mailboxes).flatMap((source) => source.postings)).toEqual([]);
+    expect(listMailbox).toHaveBeenCalledTimes(9);
+    await runtime.listMail(id);
+    expect(listMailbox).toHaveBeenCalledTimes(9);
+    await runtime.store.idle();
+    expect(updateMailOrganization).not.toHaveBeenCalled();
+  });
+
+  it("rechecks an in-flight background scan when force-refreshed before labeling", async () => {
+    const { runtime } = await fixture();
+    const entered = deferred<void>();
+    const first = deferred<ImboxResult>();
+    let imboxReads = 0;
+    vi.mocked(listMailbox).mockImplementation(async (name) => {
+      if (name === "imbox" && ++imboxReads === 1) { entered.resolve(); return first.promise; }
+      return box(name);
+    });
+    const stale = runtime.refresh();
+    await entered.promise;
+    const fresh = runtime.refresh(true);
+    first.resolve(box("imbox", [row()]));
+    await Promise.all([stale, fresh]);
+    expect(listMailbox).toHaveBeenCalledTimes(12);
+    expect(updateMailOrganization).not.toHaveBeenCalled();
+    expect((await runtime.store.preview(draft)).count).toBe(0);
   });
 });

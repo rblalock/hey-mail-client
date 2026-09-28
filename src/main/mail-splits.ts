@@ -111,6 +111,14 @@ export class MailSplits {
   async listingState(id: string): Promise<MailSplitState> {
     if (!isMailSplitId(id)) throw new Error("Choose a valid split.");
     await this.ready;
+    await this.configQueue;
+    this.assertRunning();
+    const current = this.splits.find((item) => item.id === id);
+    if (!current) throw new Error("This split no longer exists.");
+    // Rendering already-known membership must not wait behind unrelated label
+    // writes. Cold memberships stay serialized with writes to avoid overwriting
+    // a newer confirmed membership with a read begun before the write.
+    if (!current.labelId || this.labels.has(current.labelId)) return this.snapshot();
     await this.enqueue(async () => {
       await this.configQueue;
       this.assertRunning();

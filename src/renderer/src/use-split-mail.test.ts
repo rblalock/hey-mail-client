@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ImboxPosting, MailboxKey, MailWatchChange } from "../../shared/contracts";
 import type { MailSplitPage } from "../../shared/mail-splits";
-import { mergeSplitPage, SplitMailSession } from "./use-split-mail";
+import { mergeSplitPage, SplitMailCache, SplitMailSession } from "./use-split-mail";
 import { groupAccountSplitMailboxes } from "./sectioned-imbox";
 
 const row = (id: string, seen = false): ImboxPosting => ({ id, topicId: `topic-${id}`, seen, subject: id, summary: "", createdAt: "2026-09-27", contacts: [], sender: { name: "Example" }, visibleEntryCount: 1 });
@@ -13,6 +13,7 @@ const deferred = () => {
   return { promise, resolve };
 };
 const sessions: SplitMailSession[] = [];
+const caches: SplitMailCache[] = [];
 const tick = async () => { await Promise.resolve(); await Promise.resolve(); };
 function fixture() {
   const list = vi.fn<(id: string, cursor?: string) => Promise<MailSplitPage>>().mockResolvedValue(page([]));
@@ -24,7 +25,22 @@ function fixture() {
   sessions.push(session);
   return { session, list, source, changed, unsubscribe, emit: (change: MailWatchChange) => listener(change), start: () => session.start(changed) };
 }
-afterEach(() => { sessions.splice(0).forEach((session) => session.stop()); vi.useRealTimers(); });
+function cacheFixture(options: { maxSessions?: number; staleAfterMs?: number; now?: () => number } = {}) {
+  const list = vi.fn<(id: string, cursor?: string) => Promise<MailSplitPage>>().mockImplementation(async (id) => page([id], `${id}-history`));
+  const listeners = new Set<(change: MailWatchChange) => void>();
+  const source = { listSplitMail: list, subscribe: (listener: (change: MailWatchChange) => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+  const cache = new SplitMailCache(source, options);
+  caches.push(cache);
+  let selected: SplitMailSession | undefined;
+  const select = (id: string, definition = "definition") => {
+    selected?.deactivate();
+    selected = cache.get(id, definition);
+    selected.start(vi.fn());
+    return selected;
+  };
+  return { cache, list, listeners, select, emit: (change: MailWatchChange) => listeners.forEach((listener) => listener(change)) };
+}
+afterEach(() => { sessions.splice(0).forEach((session) => session.stop()); caches.splice(0).forEach((cache) => cache.stop()); vi.useRealTimers(); });
 
 describe("split page merging", () => {
   it("prepends an authoritative head, updates historical rows, and retains older history", () => {
@@ -85,6 +101,19 @@ describe("split request lifecycle", () => {
     await session.loadMore();
     expect(list.mock.calls.at(-1)).toEqual(["team", "second"]);
     expect(session.state.nextPage).toBeUndefined();
+  });
+
+  it("replaces head IDs within their source without losing a historical Reply Later membership", async () => {
+    const { session, list, start } = fixture();
+    const shared = row("shared");
+    list.mockResolvedValueOnce({ mailboxes: { imbox: box("imbox", [shared]), laterbox: box("laterbox", []) }, nextPage: "first" })
+      .mockResolvedValueOnce({ mailboxes: { laterbox: box("laterbox", [shared]) }, nextPage: "second" })
+      .mockResolvedValueOnce({ mailboxes: { imbox: box("imbox", [{ ...shared, seen: true }]), laterbox: box("laterbox", []) }, nextPage: "new-first" });
+    start(); await tick(); await session.loadMore(); await session.refresh();
+    expect(session.state.mailboxes.imbox?.postings).toEqual([{ ...shared, seen: true }]);
+    expect(session.state.mailboxes.laterbox?.postings).toEqual([shared]);
+    expect(groupAccountSplitMailboxes(session.state.mailboxes).replyLater).toEqual([shared]);
+    expect(session.state.nextPage).toBe("second");
   });
 
   it("does not restart exhausted history after a watch refresh, while explicit reset restarts it", async () => {
@@ -192,6 +221,48 @@ describe("split request lifecycle", () => {
     expect(session.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["match"]);
   });
 
+  it.each([
+    "This split page has expired. Refresh to continue.",
+    "This split changed or its page expired. Refresh to continue.",
+    "Error invoking remote method 'mail:list-split-mail': Error: This split changed or its page expired. Refresh to continue.",
+  ])("recovers expired history on explicit retry without clearing visible rows: %s", async (message) => {
+    const replacement = deferred();
+    const { session, list, start } = fixture();
+    list.mockResolvedValueOnce(page(["head"], "old-first"))
+      .mockResolvedValueOnce(page(["history"], "expired"))
+      .mockRejectedValueOnce(new Error(message))
+      .mockReturnValueOnce(replacement.promise)
+      .mockResolvedValueOnce(page(["fresh-history"]));
+    start(); await tick(); await session.loadMore(); await session.loadMore();
+    expect(session.state.error).toBe(message);
+    expect(list).toHaveBeenCalledTimes(3);
+    const retry = session.loadMore();
+    expect(list.mock.calls.at(-1)).toEqual(["team", undefined, { refresh: true }]);
+    expect(session.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["head", "history"]);
+    expect(session.state.loading).toBe(false);
+    replacement.resolve(page(["fresh-head"], "fresh-next")); await retry;
+    expect(session.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["fresh-head"]);
+    expect(session.state.error).toBeUndefined();
+    await session.loadMore();
+    expect(list.mock.calls.at(-1)).toEqual(["team", "fresh-next"]);
+    expect(session.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["fresh-head", "fresh-history"]);
+  });
+
+  it("retains expired-cursor restart intent if the replacement head fails", async () => {
+    const { session, list, start } = fixture();
+    list.mockResolvedValueOnce(page(["head"], "expired"))
+      .mockRejectedValueOnce(new Error("This split page has expired. Refresh to continue."))
+      .mockRejectedValueOnce(new Error("Offline"))
+      .mockResolvedValueOnce(page(["fresh-head"], "fresh-next"));
+    start(); await tick(); await session.loadMore(); await session.loadMore();
+    expect(session.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["head"]);
+    expect(session.state.error).toBe("Offline");
+    expect(list).toHaveBeenCalledTimes(3);
+    await session.loadMore();
+    expect(list.mock.calls.slice(2)).toEqual([["team", undefined, { refresh: true }], ["team", undefined, { refresh: true }]]);
+    expect(session.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["fresh-head"]);
+  });
+
   it("keeps resync reset intent when more watch events arrive before the debounce", async () => {
     vi.useFakeTimers();
     const { session, list, emit, start } = fixture();
@@ -202,5 +273,201 @@ describe("split request lifecycle", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(session.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["fresh"]);
     expect(session.state.nextPage).toBe("new-first");
+  });
+});
+
+describe("retained account split views", () => {
+  it("reuses rows and the exact history cursor for A → B → A without refetching", async () => {
+    const { select, list } = cacheFixture();
+    const first = select("a"); await tick();
+    list.mockResolvedValueOnce(page(["a-old"], "a-next"));
+    await first.loadMore();
+    select("b"); await tick();
+    const retained = select("a");
+    expect(retained).toBe(first);
+    expect(retained.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["a", "a-old"]);
+    expect(retained.state.nextPage).toBe("a-next");
+    expect(retained.state.loading).toBe(false);
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets an already-started request finish offscreen without launching extra work", async () => {
+    const pending = deferred();
+    const { select, list } = cacheFixture();
+    list.mockReturnValueOnce(pending.promise);
+    const first = select("a");
+    const second = select("b"); await tick();
+    pending.resolve(page(["a"], "a-history")); await tick();
+    expect(first.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["a"]);
+    expect(second.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["b"]);
+    select("a");
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not duplicate an in-flight request when returning before it finishes", async () => {
+    const pending = deferred();
+    const { select, list } = cacheFixture();
+    list.mockReturnValueOnce(pending.promise);
+    select("a"); select("b"); await tick(); select("a");
+    expect(list).toHaveBeenCalledTimes(2);
+    pending.resolve(page(["a"])); await tick();
+    expect(select("a").state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["a"]);
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps expired rows visible while refreshing on reactivation", async () => {
+    let now = 0;
+    const { select, list } = cacheFixture({ now: () => now, staleAfterMs: 100 });
+    select("a"); await tick(); select("b"); await tick();
+    now = 101;
+    const pending = deferred(); list.mockReturnValueOnce(pending.promise);
+    const retained = select("a");
+    expect(retained.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["a"]);
+    expect(retained.state.loading).toBe(false);
+    expect(list).toHaveBeenCalledTimes(3);
+    pending.resolve(page(["fresh"])); await tick();
+    expect(retained.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["fresh"]);
+  });
+
+  it("retains a stale view after a refresh failure and retries on the next visit", async () => {
+    let now = 0;
+    const { select, list } = cacheFixture({ now: () => now, staleAfterMs: 100 });
+    const first = select("a"); await tick(); select("b"); await tick();
+    now = 101; list.mockRejectedValueOnce(new Error("Offline")); select("a"); await tick();
+    expect(first.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["a"]);
+    expect(first.state.error).toBe("Offline");
+    select("b"); await tick(); select("a"); await tick();
+    expect(first.state.error).toBeUndefined();
+    expect(list.mock.calls.filter(([id]) => id === "a")).toHaveLength(3);
+  });
+
+  it("does not auto-resume interrupted history until its split is active again", async () => {
+    const interrupted = deferred(); const refreshed = deferred();
+    const { cache, select, list } = cacheFixture();
+    const first = select("a"); await tick();
+    list.mockResolvedValueOnce(page(["a-old"], "a-second")); await first.loadMore();
+    list.mockReturnValueOnce(interrupted.promise); const oldRead = first.loadMore();
+    cache.apply({ operation: "seen", postingIds: ["a"] });
+    list.mockReturnValueOnce(refreshed.promise); const refreshing = cache.refresh();
+    select("b"); await tick();
+    interrupted.resolve(page(["stale"], "lost")); await oldRead;
+    refreshed.resolve(page(["a"], "new-first")); await refreshing;
+    expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "a", "a", "a", "b"]);
+    list.mockResolvedValueOnce(page(["a-next"])); select("a"); await tick();
+    expect(list.mock.calls.at(-1)).toEqual(["a", "a-second"]);
+    expect(first.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["a", "a-old", "a-next"]);
+  });
+
+  it("updates inactive views after local mutations and refreshes only the active split", async () => {
+    const { cache, select, list } = cacheFixture();
+    list.mockResolvedValue(page(["shared"]));
+    const first = select("a"); await tick();
+    const second = select("b"); await tick();
+    cache.apply({ operation: "seen", postingIds: ["shared"] });
+    expect(first.state.mailboxes.imbox?.postings[0]?.seen).toBe(true);
+    expect(second.state.mailboxes.imbox?.postings[0]?.seen).toBe(true);
+    await cache.refresh();
+    expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "b", "b"]);
+    select("a"); await tick();
+    expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "b", "b", "a"]);
+  });
+
+  it("refreshes the current split when an older split's async operation completes", async () => {
+    const pending = deferred();
+    const { cache, select, list } = cacheFixture();
+    select("a"); await tick();
+    const operationCompleted = cache.refresh;
+    list.mockReturnValueOnce(pending.promise);
+    const second = select("b");
+    expect(second.state.loading).toBe(true);
+    list.mockResolvedValueOnce(page(["fresh-b"]));
+    await operationCompleted();
+    pending.resolve(page(["stale-b"])); await tick();
+    expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "b", "b"]);
+    expect(second.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["fresh-b"]);
+    expect(second.state.loading).toBe(false);
+    expect(second.state.error).toBeUndefined();
+  });
+
+  it("removes watched deletions from inactive views without eagerly loading them", async () => {
+    vi.useFakeTimers();
+    const { select, list, emit } = cacheFixture();
+    const first = select("a"); await tick(); select("b"); await tick();
+    emit({ change: "deleted", postingId: "a" });
+    expect(first.state.mailboxes.imbox?.postings).toEqual([]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "b", "b"]);
+    list.mockResolvedValueOnce(page([])); select("a"); await tick();
+    expect(first.state.mailboxes.imbox?.postings).toEqual([]);
+    expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "b", "b", "a"]);
+  });
+
+  it("ignores stale inactive responses after deletion and preserves resync reset intent", async () => {
+    vi.useFakeTimers();
+    const pending = deferred();
+    const { select, list, emit } = cacheFixture();
+    const first = select("a"); await tick();
+    list.mockResolvedValueOnce(page(["older"], "second")); await first.loadMore();
+    list.mockReturnValueOnce(pending.promise); const loading = first.loadMore();
+    select("b"); await tick();
+    emit({ change: "deleted", postingId: "older" }); emit({ change: "resync" });
+    pending.resolve(page(["older", "stale"], "lost")); await loading;
+    expect(first.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["a"]);
+    list.mockResolvedValueOnce(page(["new-a"], "new-cursor")); select("a"); await tick();
+    expect(first.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["new-a"]);
+    expect(first.state.nextPage).toBe("new-cursor");
+    expect(list.mock.calls.at(-1)).toEqual(["a", undefined, { refresh: true }]);
+  });
+
+  it("discards changed definitions and old-account requests", async () => {
+    const pending = deferred();
+    const old = cacheFixture(); old.list.mockReturnValueOnce(pending.promise);
+    const original = old.select("a", "old");
+    const replacement = old.select("a", "new"); await tick();
+    expect(replacement).not.toBe(original);
+    old.cache.stop();
+    expect(old.listeners.size).toBe(0);
+    const current = cacheFixture(); const currentSession = current.select("a", "new"); await tick();
+    pending.resolve(page(["private-old-account"])); await tick();
+    expect(original.state.mailboxes).toEqual({});
+    expect(currentSession.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["a"]);
+    expect(current.list).toHaveBeenCalledOnce();
+  });
+
+  it("an old-account operation completion cannot cancel the new account's pending load", async () => {
+    const old = cacheFixture(); old.select("a"); await tick();
+    const oldOperationCompleted = old.cache.refresh;
+    old.cache.stop();
+    const current = cacheFixture(); const pending = deferred(); current.list.mockReturnValueOnce(pending.promise);
+    const currentSession = current.select("a");
+    await oldOperationCompleted();
+    expect(currentSession.state.loading).toBe(true);
+    pending.resolve(page(["new-account"])); await tick();
+    expect(currentSession.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["new-account"]);
+    expect(current.list).toHaveBeenCalledOnce();
+    expect(old.list).toHaveBeenCalledOnce();
+  });
+
+  it("evicts the least recently selected split and cleans up its subscription", async () => {
+    const { select, list, listeners } = cacheFixture({ maxSessions: 2 });
+    const first = select("a"); await tick();
+    select("b"); await tick(); select("a"); select("c"); await tick();
+    expect(listeners.size).toBe(2);
+    expect(select("a")).toBe(first);
+    const second = select("b"); await tick();
+    expect(second.state.mailboxes.imbox?.postings.map((item) => item.id)).toEqual(["b"]);
+    expect(list.mock.calls.map(([id]) => id)).toEqual(["a", "b", "c", "b"]);
+    expect(listeners.size).toBe(2);
+  });
+
+  it("can restart after effect cleanup and still applies mutations to the active view", async () => {
+    const { cache, select, list, listeners } = cacheFixture();
+    const first = select("a"); await tick();
+    cache.stop(); expect(listeners.size).toBe(0);
+    first.start(vi.fn());
+    cache.apply({ operation: "seen", postingIds: ["a"] });
+    expect(first.state.mailboxes.imbox?.postings[0]?.seen).toBe(true);
+    expect(listeners.size).toBe(1);
+    expect(list).toHaveBeenCalledOnce();
   });
 });

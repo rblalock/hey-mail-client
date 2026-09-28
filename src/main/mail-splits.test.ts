@@ -92,6 +92,49 @@ describe("profile split configuration", () => {
 });
 
 describe("additive split label synchronization", () => {
+  it("renders warmed split membership while unrelated background label writes are pending", async () => {
+    const started = deferred();
+    const writing = deferred();
+    const { service, dependencies } = await fixture({
+      addLabel: vi.fn(async () => { started.resolve(); await writing.promise; }),
+    });
+    const saved = await service.save({ ...draft, labelId: "31" });
+    await service.idle();
+    const id = saved.splits[0]!.id;
+    expect(dependencies.listLabelPage).toHaveBeenCalledTimes(1);
+    const observing = service.observe([row()]);
+    await started.promise;
+    let rendered = false;
+    const listing = service.listingState(id).then((state) => { rendered = true; return state; });
+    try {
+      await vi.waitFor(() => expect(rendered).toBe(true));
+      expect((await listing).memberships[id]).toEqual([]);
+      expect(dependencies.listLabelPage).toHaveBeenCalledTimes(1);
+    } finally {
+      writing.resolve();
+      await observing;
+    }
+    expect((await service.listingState(id)).memberships[id]).toEqual(["1010"]);
+  });
+
+  it("serializes cold label membership with writes and shares its completed read", async () => {
+    const started = deferred();
+    const reading = deferred<{ postings: ImboxPosting[] }>();
+    const { service, dependencies } = await fixture({
+      listLabelPage: vi.fn(async () => { started.resolve(); return reading.promise; }),
+    });
+    const saved = await service.save({ ...draft, enabled: false, labelId: "31" });
+    const id = saved.splits[0]!.id;
+    const first = service.listingState(id);
+    await started.promise;
+    const second = service.listingState(id);
+    reading.resolve({ postings: [row()] });
+    const states = await Promise.all([first, second]);
+    expect(states.map((state) => state.memberships[id])).toEqual([["1010"], ["1010"]]);
+    expect(dependencies.listLabelPage).toHaveBeenCalledTimes(1);
+    expect(dependencies.addLabel).not.toHaveBeenCalled();
+  });
+
   it("defers label creation until a match, records returned ID, and ignores watcher echoes", async () => {
     const { service, dependencies, file } = await fixture();
     const state = await service.save(draft);

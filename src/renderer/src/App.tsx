@@ -17,6 +17,7 @@ import SplitInboxManager from "./components/SplitInboxManager";
 import SplitInboxTabs from "./components/SplitInboxTabs";
 import AddToSplitDialog from "./components/AddToSplitDialog";
 import { useSplitMail } from "./use-split-mail";
+import { createMailListViewState, type MailListViewState } from "./mail-list-view-state";
 import type { MailSplitDraft, MailSplitState } from "../../shared/mail-splits";
 import { filterSplitMailboxes, splitDraftFromPosting, splitPendingCounts, splitViewIds } from "./split-mailbox";
 import { canNavigateSplits, isSplitNavigationCommand } from "./split-keyboard";
@@ -189,7 +190,26 @@ export default function App() {
   const splitId = splitIds.includes(selectedSplit) ? selectedSplit : "all";
   const namedSplit = enabledSplits.find((split) => split.id === splitId);
   const accountSplit = sectionedImbox && Boolean(namedSplit);
-  const splitMail = useSplitMail(accountSplit ? splitId : undefined, JSON.stringify(namedSplit));
+  const accountKey = `${window.heyAgent.profiles.current.active?.key ?? "unavailable"}:${window.heyAgent.profiles.current.token}`;
+  const splitDefinition = JSON.stringify(namedSplit) ?? "";
+  const splitMail = useSplitMail(accountSplit ? splitId : undefined, splitDefinition, accountKey);
+  const membershipSignature = useMemo(() => JSON.stringify(splitState.memberships), [splitState.memberships]);
+  const previousMemberships = useRef(membershipSignature);
+  useEffect(() => {
+    if (previousMemberships.current === membershipSignature) return;
+    previousMemberships.current = membershipSignature;
+    void splitMail.refresh();
+  }, [membershipSignature, splitMail.refresh]);
+  const splitViewStates = useMemo(() => new Map<string, MailListViewState>(), [accountKey]);
+  const splitViewState = useMemo(() => {
+    if (!sectionedImbox) return undefined;
+    const key = `${splitId}:${splitDefinition}`;
+    const state = splitViewStates.get(key) ?? createMailListViewState();
+    splitViewStates.delete(key);
+    splitViewStates.set(key, state);
+    while (splitViewStates.size > 12) splitViewStates.delete(splitViewStates.keys().next().value!);
+    return state;
+  }, [sectionedImbox, splitId, splitDefinition, splitViewStates]);
   const layoutRef = useRef(paginatedImbox);
   layoutRef.current = paginatedImbox;
   const mailboxState = useRef(mailboxes);
@@ -243,12 +263,14 @@ export default function App() {
   const updateVisibleSectionPostings = useCallback((postings: ImboxPosting[]) => {
     setVisibleSectionPostings(postings);
     setMailboxCursor((current) => {
-      const id = postings.some((posting) => posting.id === current.imbox) ? current.imbox : postings[0]?.id;
+      const preferred = current.imbox ?? splitViewState?.highlightedId;
+      const id = postings.some((posting) => posting.id === preferred) ? preferred : postings[0]?.id;
       return id === current.imbox ? current : { ...current, imbox: id };
     });
-  }, []);
+  }, [splitViewState]);
   const imboxUnread = mailboxes.imbox?.postings.filter((posting) => !pendingTrashIds.has(posting.id) && !posting.seen && !posting.bubbledUp).length ?? 0;
   const highlightedId = activeMailbox ? mailboxCursor[activeMailbox] : undefined;
+  useEffect(() => { if (splitViewState && highlightedId) splitViewState.highlightedId = highlightedId; }, [splitViewState, highlightedId]);
   const loading = accountSplit ? splitMail.loading : activeMailbox ? Boolean(loadingMailboxes[activeMailbox]) : false;
   const consumeAgentDraftSeed = useCallback(() => setAgentDraftSeed(undefined), []);
   const shortcuts = useMemo(() => resolveShortcuts(settings).map((shortcut) => sectionedImbox && shortcut.id === "seen"
@@ -378,6 +400,7 @@ export default function App() {
   const chooseSplit = useCallback((id: string, focusMail = false) => {
     if (!splitIds.includes(id)) return;
     splitFocusRequest.current = focusMail ? id : undefined;
+    setImboxSection("new");
     setActive("imbox");
     if (!paginatedImbox) void updateImboxLayout("sectioned");
     setSelectedSplit(id);
@@ -390,14 +413,17 @@ export default function App() {
     readerSequence.current = [];
     if (id !== splitId) setVisibleSectionPostings([]);
     setRetainedActiveId(undefined);
-    if (id !== splitId) setMailboxCursor((current) => ({ ...current, imbox: undefined }));
+    if (id !== splitId) {
+      const saved = splitViewStates.get(`${id}:${JSON.stringify(enabledSplits.find((split) => split.id === id)) ?? ""}`);
+      setMailboxCursor((current) => ({ ...current, imbox: saved?.highlightedId }));
+    }
     requestAnimationFrame(() => {
       const target = focusMail
-        ? document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-row') ?? document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-list')
+        ? document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-row[aria-current="true"]') ?? document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-row') ?? document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-list')
         : document.querySelector<HTMLElement>('.split-inbox-tabs [aria-selected="true"]');
       target?.focus({ preventScroll: true });
     });
-  }, [splitIds, splitId, setSelectedSplit, setSelected, setActive, paginatedImbox, updateImboxLayout]);
+  }, [splitIds, splitId, splitViewStates, enabledSplits, setSelectedSplit, setSelected, setActive, paginatedImbox, updateImboxLayout]);
 
   useEffect(() => {
     if (splitFocusRequest.current !== splitId || loading || selected || !visibleSectionPostings.length) return;
@@ -408,7 +434,7 @@ export default function App() {
       if (focused && !focused.matches('body, html, .mail-list, .mail-row, [data-split-navigation="tab"]') && !focused.closest('.imbox-titlebar, nav[aria-label="Mail"]')) {
         splitFocusRequest.current = undefined; return;
       }
-      const row = document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-row');
+      const row = document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-row[aria-current="true"]') ?? document.querySelector<HTMLElement>('.imbox-panel:not([hidden]) .mail-row');
       if (row) { row.focus({ preventScroll: true }); splitFocusRequest.current = undefined; }
     });
     return () => cancelAnimationFrame(frame);
@@ -482,8 +508,12 @@ export default function App() {
 
   const refreshFromToolbar = useCallback(async () => {
     if (accountSplit) {
-      try { setSplitState(await window.heyAgent.mail.refreshSplits()); setSplitLoadError(undefined); }
-      catch (reason) { setSplitLoadError(reason instanceof Error ? reason.message : "Unable to refresh split labels."); }
+      // Label reconciliation can be much slower than a list read. Keep the mail
+      // usable while it runs, then apply any newly confirmed memberships.
+      void window.heyAgent.mail.refreshSplits().then(async (state) => {
+        setSplitState(state); setSplitLoadError(undefined);
+        await splitMail.refresh();
+      }).catch((reason: unknown) => setSplitLoadError(reason instanceof Error ? reason.message : "Unable to refresh split labels."));
       await splitMail.refresh(true);
       return;
     }
@@ -1625,11 +1655,12 @@ export default function App() {
               : readerOrigin && selected ? <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={readerOrigin === "search" ? "Search results" : readerOrigin === "agent" ? "HEY Agent result" : readerOrigin === "bundle" ? threadListing?.listing?.title ?? "Bundle" : libraryReaderTitle} onOrganize={/^\d+$/.test(selected.id) || /^\d+$/.test(selected.topicId ?? "") ? () => setOrganizer({ postings: [selected] }) : undefined} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => undefined} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={0} onClose={closeReader} onPrevious={() => undefined} onNext={() => undefined} hasPrevious={false} hasNext={false} supplementalActions={addSelectedToSplit} showTraversal={false} onOpenObject={(object) => void openAgentObject(object)} />
               : activeMailbox ? <>
               <ImboxView
-                key={`${activeMailbox}:${sectionedImbox ? splitId : "hey"}`}
+                key={`${accountKey}:${activeMailbox}:${sectionedImbox ? `${splitId}:${splitDefinition}` : "hey"}`}
                 mailboxKey={activeMailbox} showSenderAvatars={settings.showSenderAvatars}
                 sectioned={sectionedImbox} accountSplit={accountSplit} sectionMailboxes={viewSectionMailboxes}
                 retainedActiveId={selected?.id === retainedActiveId ? retainedActiveId : undefined}
                 profileKey={`${window.heyAgent.profiles.current.active?.key ?? "default"}${sectionedImbox && splitId !== "all" ? `:split:${splitId}` : ""}`}
+                viewState={splitViewState}
                 initialHistoryCollapsed={splitId !== "all"}
                 pagingPaused={Boolean(commandsOpen || splitManager || addingToSplit || composer || searchOpen || organizer)}
                 onManageSplits={() => openSplitManager()}
@@ -1680,7 +1711,7 @@ export default function App() {
         onAdd={async (request) => {
           const next = await window.heyAgent.mail.addToSplit(request);
           setSplitState(next);
-          if (accountSplit) await splitMail.refresh();
+          await splitMail.refresh();
           setNotice({ message: `Added to ${next.splits.find((split) => split.id === request.splitId)?.name ?? "split"}.` });
           setBulkSelectedIds([]);
         }} />}

@@ -103,10 +103,20 @@ try {
   })()`);
   await browser("screenshot", join(artifacts, "split-tabs-desktop.png"));
   await selectSplit("github");
+  await checkpoint("warm split reuse without eager history scans");
+  await assert(`window.__splitInboxPreview.requests.filter(request=>request.operation==='list'&&request.splitId==='github'&&request.page).length===0`, "Opening a sparse split eagerly scanned history");
+  await evaluate(`window.__githubReads=window.__splitInboxPreview.requests.filter(request=>request.operation==='list'&&request.splitId==='github').length`);
+  await selectSplit("team");
+  await selectSplit("github");
+  await assert(`window.__splitInboxPreview.requests.filter(request=>request.operation==='list'&&request.splitId==='github').length===window.__githubReads`, "Warm A to B to A refetched the split");
   await expandHistory();
   // GitHub first appears at history index 100. A single scroll must advance
   // through earlier pages with no GitHub results; there is no Load More button.
-  await evaluate(`(() => {const list=document.querySelector('.imbox-panel .mail-list');list.scrollTop=list.scrollHeight;list.dispatchEvent(new Event('scroll',{bubbles:true}));return true;})()`);
+  await browser("scroll", "down", "10000", "--selector", ".imbox-panel .mail-list");
+  // The browser CLI scrolls programmatically. End supplies the actual forward
+  // keyboard intent required for fetching history (restoration alone must not).
+  await browser("focus", ".imbox-panel .mail-list");
+  await browser("press", "End");
   await browser("wait", rowIn("previouslySeen", "3100"));
   await evaluate(`(() => {
     const pages = window.__splitInboxPreview.requests.filter(request=>request.operation==='list'&&request.splitId==='github'&&request.page);
@@ -116,6 +126,15 @@ try {
     if ([...document.querySelectorAll('button')].some(button => /load more/i.test(button.textContent))) throw Error('Unexpected Load More button');
     return true;
   })()`);
+  await checkpoint("returning to a split retains rows, highlight, and scroll");
+  await browser("focus", "#mail-row-3100");
+  await evaluate(`window.__splitReturn={scrollTop:document.querySelector('.imbox-panel .mail-list').scrollTop,rows:[...document.querySelectorAll('.imbox-panel .mail-row')].map(row=>row.dataset.postingId).join(','),reads:window.__splitInboxPreview.requests.filter(request=>request.operation==='list'&&request.splitId==='github').length}`);
+  await selectSplit("team");
+  await selectSplit("github");
+  await waitFor(`document.querySelector('#mail-row-3100')?.dataset.selected==='true'`);
+  await assert(`Math.abs(document.querySelector('.imbox-panel .mail-list').scrollTop-window.__splitReturn.scrollTop)<2`, "Returning to a split lost the scroll position");
+  await assert(`[...document.querySelectorAll('.imbox-panel .mail-row')].map(row=>row.dataset.postingId).join(',')===window.__splitReturn.rows`, "Returning to a split lost loaded history");
+  await assert(`window.__splitInboxPreview.requests.filter(request=>request.operation==='list'&&request.splitId==='github').length===window.__splitReturn.reads`, "Returning to loaded history fetched it again");
 
   await checkpoint("Tab navigation, all workflow sections, and reader navigation");
   await selectSplit("all");
@@ -340,7 +359,7 @@ try {
   await browser("screenshot", join(artifacts, "split-manager-compact.png"));
   const errors=await browser("errors");
   if (errors.trim()) throw Error(errors);
-  console.log(`PASS: account-wide sections; sidebar/toolbar/body Tab recovery; arrows, Enter, Escape; native editor/reader/dialog focus; comma-separated rules and invalid-input recovery; preview/save and persisted labels; bulk manual split creation; reader Add to split and additive domain rules; source-preserving Done/Undo; empty-page history continuation; first-load error recovery and membership refresh; desktop and compact bounds. Screenshots: ${artifacts}`);
+  console.log(`PASS: cached split return without refetch; retained rows/highlight/scroll; no eager history scan; account-wide sections; sidebar/toolbar/body Tab recovery; arrows, Enter, Escape; native editor/reader/dialog focus; comma-separated rules and invalid-input recovery; preview/save and persisted labels; bulk manual split creation; reader Add to split and additive domain rules; source-preserving Done/Undo; empty-page history continuation; first-load error recovery and membership refresh; desktop and compact bounds. Screenshots: ${artifacts}`);
   }
 } catch (error) {
   const state=await evaluate(`JSON.stringify({phase:${JSON.stringify(phase)},split:${selected()},focused:document.activeElement?.outerHTML?.slice(0,500),thread:document.querySelector('.thread-panel h1')?.textContent,dialog:document.querySelector('dialog[open]')?.textContent?.slice(0,500),rows:[...document.querySelectorAll('.imbox-panel .mail-row')].map(row=>row.dataset.postingId),pages:window.__sectionedImboxPreview?.requests.filter(request=>request.options?.page)})`).catch(()=>"State unavailable after timeout.");
