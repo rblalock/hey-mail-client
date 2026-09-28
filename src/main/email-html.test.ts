@@ -1,7 +1,120 @@
 import { describe, expect, it } from "vitest";
 import { normalizeHeyHtmlFragment, parseThreadHtmlDocument } from "./email-html";
 
+function attribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+function htmlAttachment(content: string): string {
+  return `<action-text-attachment content-type="text/html" content="${attribute(content)}"></action-text-attachment>`;
+}
+
 describe("HEY HTML email parsing", () => {
+  it("expands the Action Text HTML body nested inside a Trix HTML wrapper", () => {
+    const content = htmlAttachment('<p>Your monthly usage recap.</p><p><a href="https://example.com/dashboard">View dashboard</a></p>');
+    const trix = attribute(JSON.stringify({ contentType: "text/html" }));
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42"><figure data-trix-attachment="${trix}">${content}</figure></article>`).get("42");
+
+    expect(entry?.html).toContain("Your monthly usage recap.");
+    expect(entry?.html).toContain('href="https://example.com/dashboard"');
+    expect(entry?.html).not.toContain("Attachment");
+    expect(entry?.html).not.toContain("action-text-attachment");
+    expect(entry?.attachmentNames).toBeUndefined();
+  });
+
+  it("expands nested HTML attachment content and child HTML without dropping actual files", () => {
+    const nested = htmlAttachment('<p>A body, not a downloadable file.</p>');
+    const pdf = '<action-text-attachment content-type="application/pdf" filename="report.pdf" url="https://files.example/report.pdf"></action-text-attachment>';
+    const calendar = `<figure data-trix-attachment="${attribute(JSON.stringify({ contentType: "text/calendar", filename: "invite.ics", url: "https://files.example/invite.ics" }))}"></figure>`;
+    const content = `<action-text-attachment content-type="Text/HTML; charset=utf-8">${nested}${pdf}${calendar}</action-text-attachment>`;
+    const trix = attribute(JSON.stringify({ contentType: "text/html", content }));
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42"><figure data-trix-attachment="${trix}"></figure></article>`).get("42");
+
+    expect(entry?.html).toContain("A body, not a downloadable file.");
+    expect(entry?.html).toContain("Attachment: report.pdf");
+    expect(entry?.html).toContain("Attachment: invite.ics");
+    expect(entry?.attachmentNames).toEqual(["report.pdf", "invite.ics"]);
+    expect(entry?.html).not.toContain("files.example");
+  });
+
+  it("sanitizes expanded HTML and keeps untrusted images blocked until allowed", () => {
+    const body = '<script>steal()</script><p onclick="steal()">Safe recap</p><a href="javascript:steal()">Unsafe</a><img src="https://images.example/recap.png"><img src="javascript:steal()"><style>@import "https://images.example/font.css"; p { background: url(https://images.example/background.png) }</style>';
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42">${htmlAttachment(htmlAttachment(body))}</article>`).get("42");
+
+    expect(entry?.html).toContain("Safe recap");
+    expect(entry?.hasRemoteContent).toBe(true);
+    expect(entry?.html).toContain('data-remote-src="https://images.example/recap.png"');
+    expect(entry?.html).not.toContain(' src="https://images.example/recap.png"');
+    expect(entry?.remoteHtml).toContain('src="https://images.example/recap.png"');
+    for (const html of [entry?.html, entry?.remoteHtml]) {
+      expect(html).not.toContain("<script");
+      expect(html).not.toContain("onclick");
+      expect(html).not.toContain("javascript:");
+      expect(html).not.toContain("font.css");
+    }
+  });
+
+  it("does not fetch body-wrapper URLs or misreport unknown attachments as filenames", () => {
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42">
+      <action-text-attachment content-type="text/html" url="https://files.example/body.html"></action-text-attachment>
+      <action-text-attachment content-type="application/octet-stream" url="https://files.example/unknown"></action-text-attachment>
+      <action-text-attachment content-type="text/html" filename="download.html" url="https://files.example/download.html"><figure><figcaption>download.html</figcaption></figure></action-text-attachment>
+    </article>`).get("42");
+
+    expect(entry?.html).toContain("Message content unavailable.");
+    expect(entry?.html).toContain('<p class="email-file-placeholder">Attachment</p>');
+    expect(entry?.html).toContain("Attachment: download.html");
+    expect(entry?.attachmentNames).toEqual(["download.html"]);
+    expect(entry?.html).not.toContain("files.example");
+    expect(entry?.hasRemoteContent).toBe(false);
+  });
+
+  it("keeps unknown empty attachment wrappers visible without inventing filenames", () => {
+    const entry = parseThreadHtmlDocument('<article data-entry-id="42"><figure data-trix-attachment=""></figure><action-text-attachment></action-text-attachment></article>').get("42");
+    expect(entry?.html?.match(/email-file-placeholder/g)).toHaveLength(2);
+    expect(entry?.attachmentNames).toBeUndefined();
+  });
+
+  it("decodes nested content attributes one layer at a time", () => {
+    const nested = htmlAttachment(htmlAttachment(htmlAttachment(htmlAttachment('<p>Deeply nested body.</p><a href="https://example.com/recap">Details</a>'))));
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42">${nested}</article>`).get("42");
+    expect(entry?.html).toContain("Deeply nested body.");
+    expect(entry?.html).toContain('href="https://example.com/recap"');
+    expect(entry?.attachmentNames).toBeUndefined();
+  });
+
+  it("preserves file attachments next to a shadow template body", () => {
+    const body = '<shadow-content><template shadowrootmode="open"><p>Your event details.</p></template></shadow-content><action-text-attachment content-type="text/calendar" filename="invite.ics"></action-text-attachment>';
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42">${htmlAttachment(body)}</article>`).get("42");
+    expect(entry?.html).toContain("Your event details.");
+    expect(entry?.html).toContain("Attachment: invite.ics");
+    expect(entry?.attachmentNames).toEqual(["invite.ics"]);
+  });
+
+  it("bounds nested HTML attachment expansion while preserving surrounding content", () => {
+    let nested = "<p>Beyond the nesting limit.</p>";
+    for (let depth = 0; depth < 12; depth += 1) nested = `<action-text-attachment content-type="text/html">${nested}</action-text-attachment>`;
+    const entry = parseThreadHtmlDocument(`<article data-entry-id="42"><p>Before</p>${nested}<p>After</p></article>`).get("42");
+
+    expect(entry?.html).toContain("Before");
+    expect(entry?.html).toContain("After");
+    expect(entry?.html).toContain("Message content unavailable.");
+    expect(entry?.html).not.toContain("Beyond the nesting limit.");
+    expect(entry?.attachmentNames).toBeUndefined();
+  });
+
+  it("bounds individual and cumulative expanded HTML body sizes", () => {
+    const oversized = htmlAttachment("x".repeat(1_000_001));
+    const individual = parseThreadHtmlDocument(`<article data-entry-id="42">${oversized}</article>`).get("42");
+    expect(individual?.html).toContain("Message content unavailable.");
+    expect(individual?.attachmentNames).toBeUndefined();
+
+    const nested = htmlAttachment(htmlAttachment(htmlAttachment(htmlAttachment("x".repeat(600_000)))));
+    const cumulative = parseThreadHtmlDocument(`<article data-entry-id="42">${nested}</article>`).get("42");
+    expect(cumulative?.html).toContain("Message content unavailable.");
+    expect(cumulative?.html?.length).toBeLessThan(200);
+  });
+
   it("keeps PDF attachment names visible without treating files as remote images", () => {
     const content = '<p>Please review.</p><action-text-attachment content-type="application/pdf" url="https://files.example/review.pdf" filename="review.pdf"></action-text-attachment>';
     const trix = JSON.stringify({ contentType: "text/html", content }).replace(/&/g, "&amp;").replace(/"/g, "&quot;");

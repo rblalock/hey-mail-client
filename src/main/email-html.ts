@@ -13,6 +13,8 @@ export type ParsedEmailEntry = {
 
 const MAX_DOCUMENT_LENGTH = 2_000_000;
 const MAX_ENTRY_LENGTH = 1_000_000;
+const MAX_ATTACHMENT_DEPTH = 8;
+const ATTACHMENT_SELECTOR = "figure[data-trix-attachment], action-text-attachment";
 const TRANSPARENT_PIXEL = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 
 const ALLOWED_TAGS = [
@@ -149,32 +151,56 @@ function attachmentDimension(value: unknown): string | undefined {
   return Number.isFinite(number) && number > 0 && number <= 10_000 ? String(Math.round(number)) : undefined;
 }
 
-function expandTrixAttachments(fragment: ReturnType<typeof load>): void {
-  for (let pass = 0; pass < 3; pass += 1) {
-    const attachments = fragment("figure[data-trix-attachment]");
-    if (attachments.length === 0) return;
+function expandAttachments(fragment: ReturnType<typeof load>): { hasHtmlBody: boolean; attachmentNames: string[] } {
+  const result = { hasHtmlBody: false, attachmentNames: [] as string[] };
+  let expandedLength = 0;
+  const unavailable = '<p class="email-content-placeholder">Message content unavailable. Open this conversation in HEY.</p>';
+  for (let pass = 0; pass <= MAX_ATTACHMENT_DEPTH; pass += 1) {
+    // Process outer wrappers first: their replacement can contain another
+    // attachment. Do not visit detached descendants from the same snapshot.
+    const attachments = fragment(ATTACHMENT_SELECTOR).filter((_index, element) => fragment(element).parents(ATTACHMENT_SELECTOR).length === 0);
+    if (attachments.length === 0) break;
     let expanded = false;
-    attachments.each((_index, figure) => {
-      const raw = fragment(figure).attr("data-trix-attachment");
-      if (!raw || raw.length > MAX_ENTRY_LENGTH) return;
+    attachments.each((_index, element) => {
+      const node = fragment(element);
+      const raw = node.attr("data-trix-attachment");
+      let attachment: Record<string, unknown> = {};
       try {
-        const attachment = JSON.parse(raw) as Record<string, unknown>;
-        const contentType = typeof attachment.contentType === "string" ? attachment.contentType : "";
-        if (contentType === "text/html" && typeof attachment.content === "string") {
-          fragment(figure).replaceWith(normalizeHeyHtmlFragment(attachment.content));
-          expanded = true;
-          return;
+        if (raw && raw.length <= MAX_ENTRY_LENGTH) {
+          const parsed: unknown = JSON.parse(raw);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) attachment = parsed as Record<string, unknown>;
         }
+      } catch {
+        // Keep useful child content even if the outer Trix metadata is malformed.
+      }
+      const contentType = (typeof attachment.contentType === "string" ? attachment.contentType : node.attr("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+      const filename = (typeof attachment.filename === "string" ? attachment.filename : node.attr("filename") ?? "").trim();
+      const content = typeof attachment.content === "string" ? attachment.content : node.attr("content");
+      const children = node.html() ?? "";
+      if (contentType === "text/html" && !filename) {
+        result.hasHtmlBody = true;
+        const body = content?.trim() ? content : children;
+        expandedLength += body.length;
+        node.replaceWith(pass === MAX_ATTACHMENT_DEPTH || body.length > MAX_ENTRY_LENGTH || expandedLength > MAX_DOCUMENT_LENGTH || !body.trim()
+          ? unavailable
+          : normalizeHeyHtmlEscapes(body));
+        expanded = true;
+        return;
+      }
+      const isInlineImage = contentType === "image" || contentType.startsWith("image/")
+        || (!contentType && (/\.(png|jpe?g|gif|webp|avif)$/i.test(filename) || (!filename && Boolean(node.attr("url") || node.attr("src")))));
+      if (raw === undefined && isInlineImage) return;
+      try {
         if ((contentType === "image" || contentType.startsWith("image/")) && typeof attachment.url === "string") {
-          const attributesRaw = fragment(figure).attr("data-trix-attributes");
+          const attributesRaw = node.attr("data-trix-attributes");
           let caption = "";
           let trixAttributes: Record<string, unknown> = {};
           if (attributesRaw && attributesRaw.length < 10_000) {
-            trixAttributes = JSON.parse(attributesRaw) as Record<string, unknown>;
-            if (typeof trixAttributes.caption === "string") caption = trixAttributes.caption;
+            try { trixAttributes = JSON.parse(attributesRaw) as Record<string, unknown>; } catch { /* Optional presentation only. */ }
+            if (typeof trixAttributes?.caption === "string") caption = trixAttributes.caption;
           }
-          const width = attachmentDimension(attachment.width) ?? attachmentDimension(trixAttributes.width);
-          const height = attachmentDimension(attachment.height) ?? attachmentDimension(trixAttributes.height);
+          const width = attachmentDimension(attachment.width) ?? attachmentDimension(trixAttributes?.width);
+          const height = attachmentDimension(attachment.height) ?? attachmentDimension(trixAttributes?.height);
           const replacement = load("<figure class=\"email-inline-attachment\"><img><figcaption></figcaption></figure>", null, false);
           replacement("img").attr({
             src: attachment.url,
@@ -186,20 +212,26 @@ function expandTrixAttachments(fragment: ReturnType<typeof load>): void {
           });
           if (caption) replacement("figcaption").text(caption);
           else replacement("figcaption").remove();
-          fragment(figure).replaceWith(replacement.html());
+          node.replaceWith(replacement.html());
           expanded = true;
-        } else if (typeof attachment.filename === "string") {
-          const replacement = load('<p class="email-file-placeholder"></p>', null, false);
-          replacement("p").text(`Attachment: ${attachment.filename}`);
-          fragment(figure).replaceWith(replacement.html());
-          expanded = true;
+          return;
         }
       } catch {
         // A malformed attachment must not prevent the rest of the message from rendering.
       }
+      if (!filename && children.trim()) {
+        node.replaceWith(pass === MAX_ATTACHMENT_DEPTH ? unavailable : children);
+      } else {
+        const replacement = load('<p class="email-file-placeholder"></p>', null, false);
+        replacement("p").text(filename ? `Attachment: ${filename}` : "Attachment");
+        node.replaceWith(replacement.html());
+        if (filename) result.attachmentNames.push(filename);
+      }
+      expanded = true;
     });
-    if (!expanded) return;
+    if (!expanded) break;
   }
+  return result;
 }
 
 function sanitizeFragment(fragment: string, allowRemote: boolean): string {
@@ -241,21 +273,27 @@ function sanitizeFragment(fragment: string, allowRemote: boolean): string {
 }
 
 function unwrapTrixShadowTemplate(fragment: string): string {
-  const templateStart = fragment.indexOf("<template");
-  if (templateStart < 0) return fragment;
-  const contentStart = fragment.indexOf(">", templateStart);
-  const contentEnd = fragment.lastIndexOf("</template>");
-  if (contentStart < 0 || contentEnd <= contentStart) return fragment;
-  return fragment.slice(contentStart + 1, contentEnd);
+  if (!/<template\b/i.test(fragment)) return fragment;
+  const body = load(fragment, null, false);
+  body("template").toArray().reverse().forEach((template) => {
+    body(template).replaceWith(body(template).html() ?? "");
+  });
+  return body.html() ?? "";
 }
 
-export function normalizeHeyHtmlFragment(fragment: string): string {
-  return unwrapTrixShadowTemplate(fragment)
+function normalizeHeyHtmlEscapes(fragment: string): string {
+  return unwrapTrixShadowTemplate(fragment
     .replace(/\\(?:&quot;|&#34;|&#x22;)/gi, "\"")
     .replace(/\\(?:&apos;|&#39;|&#x27;)/gi, "'")
     .replace(/\\(["'])/g, "$1")
     .replace(/\\r\\n|\\n|\\r/g, "\n")
-    .replace(/\\t/g, "\t")
+    .replace(/\\t/g, "\t"));
+}
+
+export function normalizeHeyHtmlFragment(fragment: string): string {
+  // Delay this compatibility decode until all attachment wrappers are expanded.
+  // Decoding descendant content attributes early corrupts nested HTML quoting.
+  return normalizeHeyHtmlEscapes(fragment)
     .replace(/&amp;(nbsp|amp|quot|apos|lt|gt|#\d+|#x[a-f\d]+);/gi, "&$1;");
 }
 
@@ -301,24 +339,13 @@ export function parseThreadHtmlDocument(stdout: string): Map<string, ParsedEmail
       return node.text().trim().length > 0 || (node.html() ?? "").trim().length > 0 || Object.keys(child.attribs ?? {}).length > 0;
     });
     const htmlPresentation = visibleChildren.length <= 1 ? "document" : "card";
-    expandTrixAttachments(articleBody);
-    articleBody("action-text-attachment").each((_attachmentIndex, element) => {
-      const node = articleBody(element);
-      const contentType = node.attr("content-type") ?? "";
-      const filename = node.attr("filename") ?? "";
-      if (contentType === "image" || contentType.startsWith("image/")) return;
-      if (!contentType && (!filename || /\.(png|jpe?g|gif|webp|avif)$/i.test(filename))) return;
-      const replacement = load('<p class="email-file-placeholder"></p>', null, false);
-      replacement("p").text(filename ? `Attachment: ${filename}` : "Attachment");
-      node.replaceWith(replacement.html());
-    });
+    const { hasHtmlBody, attachmentNames } = expandAttachments(articleBody);
     articleBody("figure").filter((_figureIndex, figure) => {
       const node = articleBody(figure);
       return node.text().trim().length === 0 && (node.html() ?? "").trim().length === 0;
     }).remove();
     const serialized = articleBody.html() ?? "";
     const fragment = normalizeHeyHtmlFragment(serialized);
-    const attachmentNames = load(fragment)(".email-file-placeholder").map((_i, el) => load(el).text().replace(/^Attachment:\s*/, "").trim()).get().filter(Boolean);
     if (attachmentNames.length) Object.assign(metadata, { attachmentNames });
     if (!fragment.trim() || fragment.length > MAX_ENTRY_LENGTH) {
       if (Object.keys(metadata).length > 0) result.set(id, metadata);
@@ -326,7 +353,7 @@ export function parseThreadHtmlDocument(stdout: string): Map<string, ParsedEmail
     }
     const hasRemoteContent = hasBlockedRemoteContent(fragment);
     const html = sanitizeFragment(fragment, false);
-    if (!html.trim() || !needsDocumentRendering(html)) {
+    if (!html.trim() || (!hasHtmlBody && !needsDocumentRendering(html))) {
       if (Object.keys(metadata).length > 0) result.set(id, metadata);
       return;
     }

@@ -4,7 +4,7 @@ import type {
   ScreenerDecisionRequest, ScreenerResult, ThreadEntry, MailLibraryThreads, MailboxListOptions,
 } from "../shared/contracts";
 import { parseThreadHtmlDocument } from "./email-html";
-import { listMailAttachments, withMailAttachments } from "./mail-attachments";
+import { attachmentFilename, listMailAttachments, withMailAttachments } from "./mail-attachments";
 import { applyExplicitSenderName, mailContactFrom, resolveMailSender } from "./mail-identity";
 import { findExecutable, runFile, runFileWithInput } from "./profile-process";
 import { isHeyAuthenticationFailure as authFailure } from "./hey-errors";
@@ -1091,8 +1091,8 @@ export async function readThread(topicId: string, env: NodeJS.ProcessEnv = proce
       };
     }),
     ...([...rich.entries()].some(([id, parsed]) => parsed.attachmentNames?.some((name) =>
-      !thread.entries.find((entry) => entry.id === id)?.attachments?.some((file) => file.filename === name)))
-      ? { attachmentsError: thread.attachmentsError ?? "This message contains files that HEY CLI did not return. Run hey upgrade, then reload. You can also open the conversation in HEY." } : {}),
+      !thread.entries.find((entry) => entry.id === id)?.attachments?.some((file) => file.filename === attachmentFilename(name))))
+      ? { attachmentsError: thread.attachmentsError ?? "Some attachment details are missing. Reload the conversation to try again, or open it in HEY." } : {}),
   };
 }
 

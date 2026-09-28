@@ -59,13 +59,41 @@ describe("received attachment metadata", () => {
 });
 
 describe("thread loading", () => {
-  it("shows an actionable warning when an old CLI misses files embedded in HTML", async () => {
+  it("warns about genuinely missing files without assuming the CLI needs an upgrade", async () => {
     vi.mocked(runFile).mockImplementation(async (_command, args) => {
       if (args[0] === "attachment") return response([]);
       if (args.includes("--html")) return { stdout: '<article data-entry-id="42"><action-text-attachment content-type="text/calendar" filename="invite.ics"></action-text-attachment></article>', stderr: "" };
       return response({ entries: [{ id: 42, body: "Invitation" }] });
     });
-    expect((await readThread("21", process.env, { includeHtml: true })).attachmentsError).toContain("hey upgrade");
+    const result = await readThread("21", process.env, { includeHtml: true });
+    expect(result.attachmentsError).toContain("Some attachment details are missing");
+    expect(result.attachmentsError).not.toContain("upgrade");
+  });
+  it.each([false, true])("unwraps an HTML body with optional real files without a false attachment warning (file=%s)", async (hasFile) => {
+    const body = '<h2>Weekly usage recap</h2><p>Your workspace summary.</p>'
+      + (hasFile ? '<action-text-attachment content-type="application/pdf" filename="authorization.pdf"></action-text-attachment>' : "");
+    const wrapped = '<action-text-attachment content-type="text/html" content="' + body.replace(/&/g, "&amp;").replace(/"/g, "&quot;") + '"></action-text-attachment>';
+    const trix = JSON.stringify({ contentType: "text/html", content: wrapped }).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+    vi.mocked(runFile).mockImplementation(async (_command, args) => {
+      if (args[0] === "attachment") return response(hasFile ? [rawFile] : []);
+      if (args.includes("--html")) return { stdout: `<article data-entry-id="42"><figure data-trix-attachment="${trix}"></figure></article>`, stderr: "" };
+      return response([{ id: 42, body: "📎 attachment" }]);
+    });
+    const result = await readThread("21", process.env, { includeHtml: true });
+    expect(result.attachmentsError).toBeUndefined();
+    expect(result.entries[0]?.html).toContain("Weekly usage recap");
+    expect(result.entries[0]?.html).not.toContain("action-text-attachment");
+    expect(result.entries[0]?.attachments).toEqual(hasFile ? [file] : []);
+  });
+  it("compares attachment names after the same filename normalization as the CLI metadata", async () => {
+    vi.mocked(runFile).mockImplementation(async (_command, args) => {
+      if (args[0] === "attachment") return response([{ ...rawFile, filename: "reports/authorization.pdf" }]);
+      if (args.includes("--html")) return { stdout: '<article data-entry-id="42"><action-text-attachment content-type="application/pdf" filename="reports/authorization.pdf"></action-text-attachment></article>', stderr: "" };
+      return response([{ id: 42, body: "Please review." }]);
+    });
+    const result = await readThread("21", process.env, { includeHtml: true });
+    expect(result.attachmentsError).toBeUndefined();
+    expect(result.entries[0]?.attachments).toEqual([file]);
   });
   it("combines body, rich HTML and attachment details without dropping any of them", async () => {
     vi.mocked(runFile).mockImplementation(async (_command, args) => {
