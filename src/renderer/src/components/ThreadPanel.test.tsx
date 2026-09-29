@@ -7,6 +7,15 @@ const noop = () => {};
 const posting: ImboxPosting = { id: "1", topicId: "21", subject: "Example", summary: "", seen: true, createdAt: "", sender: { name: "Maya" }, contacts: [], visibleEntryCount: 1 };
 describe("reader toggle presentation (static rendering only)", () => {
   afterEach(() => vi.unstubAllGlobals());
+  it("keeps the message readable while attachment details load and surfaces body failures", () => {
+    const thread = { topicId: "21", subject: "Example", attachmentsLoading: true, bodyError: "Formatting failed. Reload to try again.", entries: [
+      { id: "11", sender: { name: "Maya" }, occurredAt: "2026-09-10T14:18Z", body: "Useful message text" },
+    ] };
+    const $ = load(renderToStaticMarkup(<ThreadPanel posting={posting} thread={thread} sourceLabel="Mail" onRefresh={noop} onRetryThread={noop} replyRequest={0} onClose={noop} onPrevious={noop} onNext={noop} hasPrevious={false} hasNext={false} />));
+    expect($(".thread-entry").text()).toContain("Useful message text");
+    expect($("[role=status]").text()).toContain("Loading attachment details");
+    expect($("[role=alert]").text()).toContain("Formatting failed");
+  });
   it("distinguishes Me and earlier messages, using addressing only on the matching latest entry", () => {
     vi.stubGlobal("window", { heyAgent: { profiles: { current: { active: { email: "alex@example.test" } } } } });
     const sender = { id: "7", name: "Alex", email: "alex@example.test", avatarUrl: "https://app.hey.com/avatars/alex.png" };

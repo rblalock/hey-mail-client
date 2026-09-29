@@ -17,6 +17,7 @@ export type MailSplitState = {
   ownEmail?: string;
   /** Conversation IDs, keyed by split ID. These include existing HEY label members. */
   memberships: Record<string, string[]>;
+  loadingMemberships?: string[];
 };
 export type MailSplitPreview = {
   count: number;
@@ -27,6 +28,10 @@ export type MailSplitPreview = {
 export type MailSplitPage = {
   mailboxes: Partial<Record<MailboxKey, ImboxResult>>;
   nextPage?: string;
+  /** False only while the bounded first page of each source is still arriving. */
+  headComplete?: boolean;
+  membershipLoading?: boolean;
+  membershipError?: string;
 };
 export type AddToSplitRequest = {
   splitId: string;

@@ -43,6 +43,100 @@ function cacheFixture(options: { maxSessions?: number; staleAfterMs?: number; no
 afterEach(() => { sessions.splice(0).forEach((session) => session.stop()); caches.splice(0).forEach((cache) => cache.stop()); vi.useRealTimers(); });
 
 describe("watched posting read state", () => {
+  it("paints the first source heads while remaining heads load, without automatically loading history", async () => {
+    const remaining = deferred();
+    const { session, list, changed, start } = fixture();
+    list.mockResolvedValueOnce({ ...page(["first"], "head-two"), headComplete: false }).mockReturnValueOnce(remaining.promise);
+    start(); await tick();
+    expect(session.state.mailboxes.imbox?.postings[0]?.id).toBe("first");
+    expect(session.state.loading).toBe(false);
+    expect(session.state.loadingMore).toBe(true);
+    expect(list.mock.calls).toEqual([["team", undefined], ["team", "head-two"]]);
+    remaining.resolve({ mailboxes: { laterbox: box("laterbox", [row("saved")]) }, nextPage: "history", headComplete: true });
+    await tick();
+    expect(session.state.mailboxes.imbox?.postings[0]?.id).toBe("first");
+    expect(session.state.mailboxes.laterbox?.postings[0]?.id).toBe("saved");
+    expect(session.state.loadingMore).toBe(false);
+    expect(session.state.nextPage).toBe("history");
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(changed).toHaveBeenCalled();
+  });
+
+  it("retains history cursor and saved source rows during a progressive head refresh", async () => {
+    const { session, list, start } = fixture();
+    list.mockResolvedValueOnce({ ...page(["head"], "head-two"), headComplete: false })
+      .mockResolvedValueOnce({ mailboxes: { laterbox: box("laterbox", [row("saved")]) }, headComplete: true, nextPage: "older" })
+      .mockResolvedValueOnce(page(["old"], "oldest"));
+    start(); await tick(); await tick(); await session.loadMore();
+    const remaining = deferred();
+    list.mockResolvedValueOnce({ ...page(["fresh"], "new-head-two"), headComplete: false }).mockReturnValueOnce(remaining.promise);
+    const refresh = session.refresh(); await tick();
+    expect(session.state.mailboxes.laterbox?.postings[0]?.id).toBe("saved");
+    remaining.resolve({ mailboxes: { laterbox: box("laterbox", [row("saved-new")]) }, headComplete: true, nextPage: "new-older" });
+    await refresh;
+    expect(session.state.nextPage).toBe("oldest");
+    expect(session.state.mailboxes.imbox?.postings.map((posting) => posting.id)).toEqual(["fresh", "old"]);
+    expect(session.state.mailboxes.laterbox?.postings.map((posting) => posting.id)).toEqual(["saved-new"]);
+  });
+
+  it("keeps in-flight pages and seen updates without refresh work for metadata-only changes", async () => {
+    vi.useFakeTimers();
+    const waiting = deferred();
+    const { session, list, start, emit } = fixture();
+    list.mockResolvedValueOnce(page(["1"], "older")).mockReturnValueOnce(waiting.promise);
+    start(); await tick();
+    const loading = session.loadMore();
+    session.apply({ operation: "seen", postingIds: ["1"] });
+    emit({ change: "ready" });
+    emit({ change: "updated", metadataOnly: true, postingId: "1", topicId: "topic-1", postingSeen: true, box: { id: "1", key: "imbox", name: "Imbox" } });
+    waiting.resolve(page(["1", "2"])); await loading;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(session.state.mailboxes.imbox?.postings.map((posting) => [posting.id, posting.seen])).toEqual([["1", true], ["2", false]]);
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not mistake an interrupted automatic head continuation for a request to page history", async () => {
+    vi.useFakeTimers();
+    const waiting = deferred();
+    const { session, list, start, emit } = fixture();
+    list.mockResolvedValueOnce(page(["head"], "older")).mockResolvedValueOnce(page(["old"], "oldest"))
+      .mockResolvedValueOnce({ ...page(["fresh"], "head-two"), headComplete: false }).mockReturnValueOnce(waiting.promise)
+      .mockResolvedValueOnce({ ...page(["newer"], "new-head-two"), headComplete: false })
+      .mockResolvedValueOnce({ mailboxes: { laterbox: box("laterbox", []) }, headComplete: true, nextPage: "new-history" });
+    start(); await tick(); await session.loadMore();
+    const refresh = session.refresh(); await tick();
+    emit({ change: "updated", box: { id: "1", key: "imbox", name: "Imbox" }, postingId: "head" });
+    waiting.resolve({ mailboxes: { laterbox: box("laterbox", [row("stale")]) }, headComplete: true, nextPage: "stale-history" });
+    await refresh;
+    await vi.advanceTimersByTimeAsync(300);
+    expect(session.state.nextPage).toBe("oldest");
+    expect(session.state.mailboxes.imbox?.postings.map((posting) => posting.id)).toEqual(["newer", "old"]);
+    expect(list).toHaveBeenCalledTimes(6);
+  });
+
+  it("automatically retries a change-during-read race while retaining already visible rows", async () => {
+    vi.useFakeTimers();
+    const { session, list, start } = fixture();
+    list.mockResolvedValueOnce(page(["warm"])).mockRejectedValueOnce(new Error("Mail changed while loading this split. Refresh to continue.")).mockResolvedValueOnce(page(["fresh"]));
+    start(); await tick();
+    await session.refresh();
+    expect(session.state.error).toBeUndefined();
+    expect(session.state.mailboxes.imbox?.postings[0]?.id).toBe("warm");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(session.state.mailboxes.imbox?.postings[0]?.id).toBe("fresh");
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it("allows later authoritative heads to update seen state after a missed watch event", async () => {
+    const { session, list, start } = fixture();
+    list.mockResolvedValue(page(["1"]));
+    start(); await tick();
+    session.apply({ operation: "seen", postingIds: ["1"] });
+    expect(session.state.mailboxes.imbox?.postings[0]?.seen).toBe(true);
+    await session.refresh();
+    expect(session.state.mailboxes.imbox?.postings[0]?.seen).toBe(false);
+  });
+
   const update: MailWatchChange = { change: "updated", box: { id: "feed", key: "feedbox", name: "The Feed" }, postingId: "shared", topicId: "topic-shared", postingSeen: true };
 
   it.each([
@@ -202,7 +296,7 @@ describe("split request lifecycle", () => {
       .mockResolvedValueOnce(page(["3"], "third"));
     start(); await tick(); await session.loadMore();
     const interrupted = session.loadMore();
-    session.apply({ operation: "seen", postingIds: ["1"] });
+    session.apply({ operation: "trash", postingIds: ["removed"] });
     stale.resolve(page(["stale"], "lost")); await interrupted;
     expect(list).toHaveBeenCalledTimes(3);
     await session.refresh();

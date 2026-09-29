@@ -22,6 +22,45 @@ async function disk() {
 }
 
 describe("CachedMailReader", () => {
+  it("fans out live previews, replays them to joining readers, and never persists them", async () => {
+    const cache = await disk();
+    let publish!: (value: MailThread) => void;
+    let complete!: (value: MailThread) => void;
+    const fetch = vi.fn((_id: string, preview?: (value: MailThread) => void) => {
+      publish = preview!;
+      return new Promise<MailThread>((resolve) => { complete = resolve; });
+    });
+    const reader = new CachedMailReader(cache, fetch);
+    const first = vi.fn(), joined = vi.fn();
+    const pending = reader.read(profile(), "100", first);
+    const partial = { ...thread, attachmentsLoading: true };
+    publish(partial);
+    expect(reader.read(profile(), "100", joined)).toBe(pending);
+    expect(first).toHaveBeenCalledWith(partial);
+    expect(joined).toHaveBeenCalledWith(partial);
+    expect(await reader.cached(profile(), "100")).toBeUndefined();
+    complete(thread); await pending;
+    expect(await reader.cached(profile(), "100")).toEqual(thread);
+  });
+  it("rejects invalidated previews without stopping unrelated pending reads", async () => {
+    const cache = await disk();
+    let publish!: (value: MailThread) => void;
+    let complete!: (value: MailThread) => void;
+    const reader = new CachedMailReader(cache, (_id, preview) => {
+      publish = preview!;
+      return new Promise((resolve) => { complete = resolve; });
+    });
+    const preview = vi.fn();
+    const pending = reader.read(profile(), "100", preview);
+    await cache.remove(profile(), "999");
+    publish({ ...thread, attachmentsLoading: true });
+    expect(preview).toHaveBeenCalledTimes(1);
+    await cache.remove(profile(), "100");
+    publish(thread);
+    complete(thread); await pending;
+    expect(preview).toHaveBeenCalledTimes(1);
+    expect(await reader.cached(profile(), "100")).toBeUndefined();
+  });
   it("persists a successful live read for another instance and isolates accounts", async () => {
     const cache = await disk();
     const reader = new CachedMailReader(cache, async () => thread);
@@ -64,5 +103,13 @@ describe("CachedMailReader", () => {
     await cache.configure({ enabled: false, maxBytes: 100_000, retentionMs: 86_400_000 });
     expect(await new CachedMailReader(cache, async () => thread).read(profile(), "100")).toEqual(thread);
     expect((await cache.stats()).entries).toBe(0);
+  });
+  it("removes rejected reads so a retry can complete", async () => {
+    const cache = await disk();
+    const fetch = vi.fn().mockRejectedValueOnce(Error("offline")).mockResolvedValueOnce(thread);
+    const reader = new CachedMailReader(cache, fetch);
+    await expect(reader.read(profile(), "100")).rejects.toThrow("offline");
+    await expect(reader.read(profile(), "100")).resolves.toEqual(thread);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });

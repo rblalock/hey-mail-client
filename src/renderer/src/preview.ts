@@ -560,6 +560,7 @@ export function previewApi(): HeyAgentApi {
         bcc: [],
       }),
       readCachedThread: async () => undefined,
+      subscribeThreadPreview: () => () => undefined,
       readThread: async (topicId) => ({
         topicId,
         subject: sectionedFixture?.findTopic(topicId)?.subject ?? postings.find((posting) => posting.topicId === topicId)?.subject ?? "Conversation",

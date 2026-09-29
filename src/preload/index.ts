@@ -46,7 +46,14 @@ const api: HeyAgentApi = {
     sendDraft: (id) => invoke("mail:send-draft", id),
     deleteDraft: (id) => invoke("mail:delete-draft", id),
     getReplyContext: (postingId) => invoke("mail:reply-context", postingId),
-    readThread: (topicId) => invoke("mail:read-thread", topicId),
+    readThread: (topicId, requestId) => invoke("mail:read-thread", topicId, requestId),
+    subscribeThreadPreview: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, token: string, preview: Parameters<typeof listener>[0]) => {
+        if (token === current.token) listener(preview);
+      };
+      ipcRenderer.on("mail:thread-preview", handler);
+      return () => ipcRenderer.removeListener("mail:thread-preview", handler);
+    },
     readCachedThread: (topicId) => invoke("mail:read-cached-thread", topicId),
     openAttachment: (topicId, attachmentId) => invoke("mail:open-attachment", topicId, attachmentId),
     previewCalendarInvite: (topicId, attachmentId) => invoke("mail:preview-calendar-invite", topicId, attachmentId),

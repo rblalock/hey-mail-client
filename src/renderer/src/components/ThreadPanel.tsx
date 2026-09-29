@@ -163,7 +163,7 @@ export default function ThreadPanel({
     if (!posting.topicId) {
       setError("This is a HEY contact bundle. Return to the list and open the bundle to choose an individual conversation.");
     }
-  }, [posting]);
+  }, [posting.id]);
 
   useEffect(() => {
     if (embedded) return;
@@ -172,8 +172,10 @@ export default function ThreadPanel({
   }, [embedded, posting.id]);
 
   useEffect(() => {
-    if (hasMailActions) void loadReplyContext();
-  }, [hasMailActions, loadReplyContext]);
+    if (!hasMailActions || !replyExpanded) return;
+    void loadReplyContext();
+    return () => { replyContextSequence.current += 1; };
+  }, [hasMailActions, replyExpanded, loadReplyContext]);
 
   useEffect(() => {
     if (!replyExpanded || replyContacts.length > 0) return;
@@ -384,7 +386,9 @@ export default function ThreadPanel({
           {!thread && !displayError && <div className="thread-loading thread-reading-column"><span />Loading conversation…</div>}
           {displayError && <div className="thread-notice thread-reading-column">{displayError}{threadError && posting.topicId && <button type="button" className="secondary-button" onClick={onRetryThread}>Try again</button>}</div>}
           {thread?.entries.length === 0 && <p className="message-body thread-reading-column">{posting.summary || "No message text was returned by HEY."}</p>}
+          {thread?.bodyError && <div className="thread-notice thread-reading-column" role="alert">{thread.bodyError}{onRetryThread && <button type="button" className="secondary-button" onClick={onRetryThread}>Reload</button>}</div>}
           {thread?.attachmentsError && <div className="thread-notice thread-reading-column" role="alert">{thread.attachmentsError}{onRetryThread && <button type="button" className="secondary-button" onClick={onRetryThread}>Reload</button>}</div>}
+          {thread?.bodyLoading && <p className="thread-history-label thread-reading-column" role="status">Loading message formatting…</p>}
           {olderEntries.length > 0 && <p className="thread-history-label thread-reading-column">{olderEntries.length} earlier {olderEntries.length === 1 ? "message" : "messages"}</p>}
           {entries.map((entry, index) => {
             const latest = index === entries.length - 1;
@@ -416,6 +420,7 @@ export default function ThreadPanel({
               {expanded && thread && <EmailAttachments topicId={thread.topicId} attachments={entry.attachments} />}
             </article>;
           })}
+          {thread?.attachmentsLoading && <p className="thread-history-label thread-reading-column" role="status">Loading attachment details…</p>}
           {showPendingReply && pendingReply && <article ref={pendingReplyElement} className="thread-entry thread-reading-column pending-reply" aria-label="Sent reply syncing with HEY">
             <div className="entry-meta">
               <span className="entry-sender"><ContactAvatar className="entry-avatar" contact={{ name: "You", initials: "Y" }} /><strong>You</strong><small>Sent · syncing with HEY…</small></span>

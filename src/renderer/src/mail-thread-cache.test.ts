@@ -7,6 +7,60 @@ function thread(id: string): MailThread {
 }
 
 describe("MailThreadCache", () => {
+  it("fans out progressive body previews to joining readers and ignores invalidated events", async () => {
+    let publish!: (value: MailThread) => void;
+    let finish!: (value: MailThread) => void;
+    const cache = new MailThreadCache();
+    const first = vi.fn(), joined = vi.fn();
+    const reader = vi.fn((_id: string, preview?: (value: MailThread) => void) => {
+      publish = preview!;
+      return new Promise<MailThread>((resolve) => { finish = resolve; });
+    });
+    const pending = cache.read("101", reader, false, undefined, first);
+    const partial = { ...thread("101"), attachmentsLoading: true };
+    publish(partial);
+    expect(cache.read("101", reader, false, undefined, joined)).toBe(pending);
+    expect(joined).toHaveBeenCalledWith(partial);
+    expect(first).toHaveBeenCalledWith(partial);
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(cache.isFresh("101")).toBe(false);
+    cache.invalidate("101");
+    publish(thread("101"));
+    finish(thread("101")); await pending;
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(joined).toHaveBeenCalledTimes(1);
+    expect(cache.get("101")).toBeUndefined();
+  });
+  it("does not let slow disk overwrite a live body preview or mark incomplete results fresh", async () => {
+    let publish!: (value: MailThread) => void;
+    let finish!: (value: MailThread) => void;
+    let finishDisk!: (value: MailThread) => void;
+    const cache = new MailThreadCache();
+    const pending = cache.read("101", (_id, preview) => {
+      publish = preview!;
+      return new Promise((resolve) => { finish = resolve; });
+    }, false, () => new Promise((resolve) => { finishDisk = resolve; }));
+    publish({ ...thread("live"), attachmentsLoading: true });
+    finishDisk(thread("disk")); await Promise.resolve();
+    expect(cache.get("101")?.subject).toBe("Conversation live");
+    finish({ ...thread("live"), attachmentsError: "Unavailable" }); await pending;
+    expect(cache.isFresh("101")).toBe(false);
+  });
+  it("stops loading indicators when a previewed request fails and allows retry", async () => {
+    let reject!: (error: Error) => void;
+    const cache = new MailThreadCache();
+    const preview = vi.fn();
+    const live = cache.read("101", (_id, publish) => {
+      publish?.({ ...thread("101"), attachmentsLoading: true, bodyLoading: true });
+      return new Promise((_resolve, fail) => { reject = fail; });
+    }, false, undefined, preview);
+    reject(Error("request closed"));
+    await expect(live).rejects.toThrow("request closed");
+    expect(cache.get("101")).toEqual(thread("101"));
+    expect(cache.isFresh("101")).toBe(false);
+    expect(preview.mock.calls.at(-1)?.[0]).toEqual(thread("101"));
+    await expect(cache.read("101", async () => thread("retried"))).resolves.toEqual(thread("retried"));
+  });
   it("reuses completed reads and deduplicates reads already in flight", async () => {
     let resolve!: (value: MailThread) => void;
     const reader = vi.fn(() => new Promise<MailThread>((done) => { resolve = done; }));

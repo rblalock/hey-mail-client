@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HeyAccountScope } from "../../resources/hey-account-scope.mjs";
-import type { ImboxPosting, ImboxResult, MailboxKey } from "../shared/contracts";
+import type { ImboxPosting, ImboxResult, MailboxKey, MailLibraryThreads } from "../shared/contracts";
 import { SPLIT_MAILBOXES } from "../shared/mail-splits";
 import { listLibrary, listLibraryThreads, listMailbox, updateMailOrganization } from "./hey";
 import { profileRequest } from "./profile-process";
@@ -289,6 +289,136 @@ describe("account-wide split pages", () => {
 });
 
 describe("shared split source cache", () => {
+  it("shows rule matches before a cold linked label finishes and then includes manual members", async () => {
+    const { runtime, onChange } = await fixture(false);
+    const saved = await runtime.store.save({ ...draft, enabled: false });
+    await runtime.store.idle();
+    const id = saved.splits[0]!.id;
+    const waiting = deferred<MailLibraryThreads>();
+    vi.mocked(listLibraryThreads).mockReturnValueOnce(waiting.promise);
+    const manual = row("19", "manual@elsewhere.test");
+    vi.mocked(listMailbox).mockImplementation(async (name) => box(name, name === "imbox" ? [row(), manual] : []));
+    const first = await runtime.listMail(id, undefined, { progressive: true });
+    expect(first.membershipLoading).toBe(true);
+    expect(first.mailboxes.imbox?.postings.map((posting) => posting.id)).toEqual(["10"]);
+    expect((await runtime.get()).loadingMemberships).toEqual([id]);
+    expect(updateMailOrganization).not.toHaveBeenCalled();
+    waiting.resolve({ kind: "labels", id: "31", title: "Team", postings: [manual] });
+    await runtime.store.idle();
+    await vi.waitFor(() => expect(onChange.mock.calls.at(-1)?.[0].loadingMemberships).toBeUndefined());
+    const ready = await runtime.listMail(id, undefined, { progressive: true });
+    expect(ready.membershipLoading).toBe(false);
+    expect(ready.mailboxes.imbox?.postings.map((posting) => posting.id)).toEqual(["10", "19"]);
+    expect(listMailbox).toHaveBeenCalledTimes(3);
+    expect(updateMailOrganization).not.toHaveBeenCalled();
+  });
+
+  it("reports a cold linked-label read failure without blocking rule matches and retries explicitly", async () => {
+    const { runtime } = await fixture(false);
+    const saved = await runtime.store.save({ ...draft, enabled: false });
+    await runtime.store.idle();
+    const id = saved.splits[0]!.id;
+    vi.mocked(listLibraryThreads).mockRejectedValue(new Error("private transport failure"));
+    await runtime.listMail(id, undefined, { progressive: true });
+    await vi.waitFor(async () => expect(Object.values((await runtime.get()).errors)).toEqual(expect.arrayContaining([expect.stringContaining("linked label")])));
+    const result = await runtime.listMail(id, undefined, { progressive: true });
+    expect(result.membershipError).toContain("linked label");
+    expect(result.membershipError).not.toContain("private");
+    expect(result.membershipLoading).toBe(false);
+    expect(result.mailboxes.imbox?.postings).toHaveLength(1);
+    expect(listLibraryThreads).toHaveBeenCalledTimes(1);
+    vi.mocked(listLibraryThreads).mockResolvedValue({ kind: "labels", id: "31", title: "Team", postings: [] });
+    runtime.invalidate();
+    await runtime.listMail(id, undefined, { progressive: true });
+    await runtime.store.idle();
+    await vi.waitFor(async () => expect((await runtime.get()).errors).toEqual({}));
+  });
+
+  it("preserves native authentication failures and never caches them", async () => {
+    const { runtime } = await fixture();
+    vi.mocked(listMailbox).mockResolvedValue({ ...box("feedbox"), status: "needs-auth", detail: "Sign in again." });
+    for (let attempt = 0; attempt < 2; attempt++) expect(await runtime.listMailbox("feedbox", { paginated: true, singlePage: true })).toMatchObject({ status: "needs-auth", detail: "Sign in again." });
+    expect(listMailbox).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares native first pages with split reads and refreshes only the requested mailbox", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    await runtime.listMailbox("imbox", { paginated: true, singlePage: true });
+    await runtime.listMail(id);
+    expect(listMailbox).toHaveBeenCalledTimes(6);
+    await runtime.listMailbox("imbox", { paginated: true, singlePage: true, refresh: true });
+    await runtime.listMail(id);
+    expect(listMailbox).toHaveBeenCalledTimes(7);
+    expect(vi.mocked(listMailbox).mock.calls.filter(([name]) => name === "imbox")).toHaveLength(2);
+  });
+
+  it("publishes the first three split sources before the other heads and never walks history automatically", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    vi.mocked(listMailbox).mockImplementation(async (name) => ({ ...box(name, [row()]), nextPage: "history" }));
+    const first = await runtime.listMail(id, undefined, { progressive: true });
+    expect(first.headComplete).toBe(false);
+    expect(Object.keys(first.mailboxes)).toEqual(["imbox", "feedbox", "trailbox"]);
+    expect(listMailbox).toHaveBeenCalledTimes(3);
+    const second = await runtime.listMail(id, first.nextPage, { progressive: true });
+    expect(second.headComplete).toBe(true);
+    expect(Object.keys(second.mailboxes)).toEqual(["asidebox", "laterbox", "bubblebox"]);
+    expect(second.nextPage).toBeTruthy();
+    expect(listMailbox).toHaveBeenCalledTimes(6);
+    expect(vi.mocked(listMailbox).mock.calls.every(([, , options]) => options?.page === undefined)).toBe(true);
+  });
+
+  it("deduplicates native and split in-flight heads and overlays confirmed seen state on old responses", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    const waiting = deferred<ImboxResult>();
+    vi.mocked(listMailbox).mockImplementation(async (name) => name === "imbox" ? waiting.promise : box(name));
+    const native = runtime.listMailbox("imbox", { paginated: true, singlePage: true });
+    const split = runtime.listMail(id, undefined, { progressive: true });
+    await vi.waitFor(() => expect(listMailbox).toHaveBeenCalledTimes(3));
+    runtime.applySeen(["10"], true);
+    waiting.resolve(box("imbox", [row()]));
+    expect((await native).postings[0]?.seen).toBe(true);
+    expect((await split).mailboxes.imbox?.postings[0]?.seen).toBe(true);
+    expect(listMailbox).toHaveBeenCalledTimes(3);
+    expect((await runtime.listMailbox("imbox", { paginated: true, singlePage: true })).postings[0]?.seen).toBe(true);
+  });
+
+  it("ignores initial ready and applies metadata-only watch events without rescanning", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    await runtime.listMail(id);
+    await runtime.store.idle();
+    vi.useFakeTimers();
+    runtime.noteChange({ change: "ready" });
+    runtime.noteChange({ change: "updated", metadataOnly: true, postingId: "10", postingSeen: true });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect((await runtime.listMail(id)).mailboxes.imbox?.postings[0]?.seen).toBe(true);
+    expect(listMailbox).toHaveBeenCalledTimes(6);
+  });
+
+  it("invalidates only the changed source while retaining other source pages", async () => {
+    const { runtime } = await fixture();
+    const id = (await runtime.get()).splits[0]!.id;
+    await runtime.listMail(id);
+    runtime.noteChange({ change: "updated", postingId: "10", box: { id: "1", key: "imbox", name: "Imbox" } });
+    await runtime.listMail(id);
+    expect(listMailbox).toHaveBeenCalledTimes(7);
+  });
+
+  it("lets a fresh authoritative read replace seen state when another device changed it", async () => {
+    const { runtime } = await fixture();
+    const options = { paginated: true, singlePage: true };
+    await runtime.listMailbox("imbox", options);
+    runtime.applySeen(["10"], true);
+    expect((await runtime.listMailbox("imbox", options)).postings[0]?.seen).toBe(true);
+    // A missed watch event must not make a local read-state override permanent.
+    expect((await runtime.listMailbox("imbox", { ...options, refresh: true })).postings[0]?.seen).toBe(false);
+    expect((await runtime.listMailbox("imbox", options)).postings[0]?.seen).toBe(false);
+    expect(listMailbox).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["send", "send-draft", "bulk-reply-send", "bulk-reply-undo", "unbundle-contact", "update-set-aside-group", "update-organization"])("invalidates split sources for %s", (command) => {
     expect(changesSplitSources(`mail:${command}`)).toBe(true);
   });

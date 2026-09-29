@@ -23,14 +23,49 @@ type ReadTogetherViewProps = {
   onClose: () => void;
   onRetryThread: (topicId: string) => void;
   onOpenObject?: (object: AgentObjectLink) => void;
+  onVisibleTopicsChange?: (topicIds: string[]) => void;
 };
 
 const ReadTogetherView = forwardRef<ReadTogetherHandle, ReadTogetherViewProps>(function ReadTogetherView({
-  items, sourceLabel, skippedCount, onClose, onRetryThread, onOpenObject,
+  items, sourceLabel, skippedCount, onClose, onRetryThread, onOpenObject, onVisibleTopicsChange,
 }, ref) {
   const scroll = useRef<HTMLDivElement>(null);
   const itemElements = useRef<Array<HTMLElement | null>>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const initialTopics = () => items.slice(0, 2).flatMap(({ posting }) => posting.topicId ? [posting.topicId] : []);
+  const [visibleTopics, setVisibleTopics] = useState<string[]>(initialTopics);
+  const [visitedTopics, setVisitedTopics] = useState<Set<string>>(() => new Set(initialTopics()));
+  const latestItems = useRef(items);
+  const visibleCallback = useRef(onVisibleTopicsChange);
+  latestItems.current = items;
+  visibleCallback.current = onVisibleTopicsChange;
+  const itemKey = items.map(({ posting }) => `${posting.id}:${posting.topicId ?? ""}`).join(",");
+  const activeTopicId = items[activeIndex]?.posting.topicId;
+
+  useEffect(() => {
+    const present = new Set(latestItems.current.map(({ posting }) => posting.topicId));
+    const topics = [...new Set([...(activeTopicId ? [activeTopicId] : []), ...visibleTopics])].filter((topicId) => present.has(topicId));
+    visibleCallback.current?.(topics);
+    setVisitedTopics((previous) => topics.every((topicId) => previous.has(topicId)) ? previous : new Set([...previous, ...topics]));
+  }, [activeTopicId, visibleTopics, itemKey]);
+
+  useEffect(() => {
+    const container = scroll.current;
+    if (!container || typeof IntersectionObserver === "undefined") return;
+    const near = new Set<string>();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const topicId = (entry.target as HTMLElement).dataset.topicId;
+        if (!topicId) continue;
+        if (entry.isIntersecting) near.add(topicId);
+        else near.delete(topicId);
+      }
+      const next = latestItems.current.flatMap(({ posting }) => posting.topicId && near.has(posting.topicId) ? [posting.topicId] : []);
+      setVisibleTopics((previous) => previous.length === next.length && previous.every((id, index) => id === next[index]) ? previous : next);
+    }, { root: container, rootMargin: "400px 0px" });
+    for (const element of itemElements.current) if (element) observer.observe(element);
+    return () => observer.disconnect();
+  }, [itemKey]);
 
   const scrollToItem = useCallback((index: number) => {
     const next = Math.min(Math.max(index, 0), items.length - 1);
@@ -104,10 +139,11 @@ const ReadTogetherView = forwardRef<ReadTogetherHandle, ReadTogetherViewProps>(f
       {items.map((item, index) => <article
         ref={(element) => { itemElements.current[index] = element; }}
         key={item.posting.id}
+        data-topic-id={item.posting.topicId}
         className="read-together-item"
         aria-label={`${index + 1} of ${items.length}: ${item.posting.subject}`}
       >
-        <ThreadPanel
+        {item.posting.topicId && (visitedTopics.has(item.posting.topicId) || item.posting.topicId === activeTopicId) ? <ThreadPanel
           embedded
           posting={item.posting}
           thread={item.thread}
@@ -124,7 +160,12 @@ const ReadTogetherView = forwardRef<ReadTogetherHandle, ReadTogetherViewProps>(f
           showTraversal={false}
           onReaderKeyDown={handleReaderKeyDown}
           onOpenObject={onOpenObject}
-        />
+        /> : <div className="read-together-thread" style={{ minHeight: 400 }}>
+          <div className="message-heading thread-reading-column">
+            <div className="thread-participants">{item.posting.sender.name}</div>
+            <h1>{item.posting.subject}</h1>
+          </div>
+        </div>}
       </article>)}
     </div>
   </section>;

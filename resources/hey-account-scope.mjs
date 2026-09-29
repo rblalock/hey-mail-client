@@ -15,6 +15,7 @@ export class HeyAccountScope {
     this.accountId = accountId;
     this.server = new URL(server).origin;
     this.known = new Map();
+    this.verifications = new Map();
   }
   remember(kind, id) {
     if (id !== undefined && id !== null) {
@@ -47,6 +48,14 @@ export class HeyAccountScope {
       for (const item of listed) { this.remember("posting", item.id); this.remember("thread", item.topic_id); }
     }
     if (["contact", "draft", "label", "collection", "snippet", "clip", "workflow"].includes(root) && action === "list") for (const item of listed) this.remember(root, item.id);
+    if (root === "contact" && action === "show" && this.known.get("contact")?.has(String(sub))) {
+      if (String(data?.id) !== String(sub)) throw new Error("HEY returned a different contact. The result was not shown.");
+      // Approved senders no longer appear in the pending Screener. A verified
+      // contact detail is also authoritative for their future-delivery clearance.
+      const clearance = data?.clearance;
+      check(clearance);
+      if (clearance?.status === "approved" && /^\d+$/.test(String(clearance.id))) this.remember("clearance", clearance.id);
+    }
     if (root === "screener" && ["list", "history"].includes(action)) for (const item of listed) { this.remember("clearance", item.id); this.remember("thread", item.topic_id); }
     if (root === "thread" && action === "read") for (const item of listed) this.remember("entry", item.id);
     if (root === "attachment" && action === "list") for (const item of listed) this.remember("attachment", item.id);
@@ -57,6 +66,15 @@ export class HeyAccountScope {
   async require(kind, id, read) {
     if (!id) throw new Error("A mail object ID is required.");
     if (this.known.get(kind)?.has(String(id))) return;
+    const key = `${kind}:${id}`;
+    const existing = this.verifications.get(key);
+    if (existing) return existing;
+    const verification = this.verify(kind, id, read);
+    this.verifications.set(key, verification);
+    try { await verification; }
+    finally { if (this.verifications.get(key) === verification) this.verifications.delete(key); }
+  }
+  async verify(kind, id, read) {
     const queries = ["thread", "posting"].includes(kind) ? mailboxQueries
       : kind === "clearance" ? [["screener", "list", "--json"]]
       : kind === "group" ? [["set-aside", "group", "list", "--json"]]

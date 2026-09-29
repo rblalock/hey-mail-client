@@ -9,6 +9,7 @@ import { applyExplicitSenderName, mailContactFrom, resolveMailSender } from "./m
 import { findExecutable, runFile, runFileWithInput } from "./profile-process";
 import { isHeyAuthenticationFailure as authFailure } from "./hey-errors";
 import { completeMail, completionState } from "./mail-completion";
+import { mailContentVersion } from "./mail-change-tracker";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -103,6 +104,7 @@ function postingFrom(value: unknown): ImboxPosting {
     subject,
     summary,
     seen: posting.seen === true,
+    contentVersion: mailContentVersion(posting),
     ...(posting.bubbled_up === true ? { bubbledUp: true } : {}),
     createdAt: normalizeHeyTimestamp(stringValue(posting.active_at, stringValue(posting.created_at))),
     contacts,
@@ -123,13 +125,14 @@ const SCREENER_DESTINATIONS = new Set<MailboxKey>(["imbox", "feedbox", "trailbox
 export function mailboxListOptions(value: unknown): MailboxListOptions {
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid HEY mailbox options.");
-  const { page, paginated, singlePage } = value as MailboxListOptions;
+  const { page, paginated, singlePage, refresh } = value as MailboxListOptions;
   if (paginated !== undefined && typeof paginated !== "boolean") throw new Error("Invalid HEY mailbox pagination.");
   // Match library cursor support: opaque values, including next_history_url, are CLI arguments.
   if (page !== undefined && (typeof page !== "string" || !page.trim() || page.length > 4096 || /[\x00-\x1f\x7f]/.test(page))) throw new Error("Invalid HEY mailbox page.");
   if (page !== undefined && paginated !== true) throw new Error("A mailbox page requires pagination.");
   if (singlePage !== undefined && (typeof singlePage !== "boolean" || paginated !== true)) throw new Error("A single mailbox page requires pagination.");
-  return { ...(page === undefined ? {} : { page }), ...(paginated === undefined ? {} : { paginated }), ...(singlePage === undefined ? {} : { singlePage }) };
+  if (refresh !== undefined && typeof refresh !== "boolean") throw new Error("Invalid HEY mailbox refresh.");
+  return { ...(page === undefined ? {} : { page }), ...(paginated === undefined ? {} : { paginated }), ...(singlePage === undefined ? {} : { singlePage }), ...(refresh === undefined ? {} : { refresh }) };
 }
 
 export function mailboxCommand(box: MailboxKey, options?: MailboxListOptions): string[] {
@@ -366,15 +369,16 @@ export async function listScreener(env: NodeJS.ProcessEnv = process.env): Promis
   }
 }
 
-export async function getMailOverview(env: NodeJS.ProcessEnv = process.env): Promise<MailOverview> {
+export async function getMailOverview(env: NodeJS.ProcessEnv = process.env, readLater?: () => Promise<ImboxResult>): Promise<MailOverview> {
   const [screener, later] = await Promise.all([
     listScreener(env),
-    listMailbox("laterbox", env),
+    readLater ? readLater() : listMailbox("laterbox", env, { paginated: true, singlePage: true }),
   ]);
   return {
     screener,
     replyLater: {
       count: later.status === "ready" ? later.postings.length : 0,
+      ...(later.nextPage ? { partial: true } : {}),
       ...(later.status === "ready" && later.postings[0] ? { latest: later.postings[0] } : {}),
     },
   };
@@ -1051,49 +1055,74 @@ export function threadCommand(topicId: string, format: "json" | "html" = "json")
   return ["thread", "read", topicId, `--${format}`];
 }
 
-export async function readThread(topicId: string, env: NodeJS.ProcessEnv = process.env, options: { includeHtml?: boolean } = {}): Promise<MailThread> {
+export async function readThread(topicId: string, env: NodeJS.ProcessEnv = process.env, options: { includeHtml?: boolean; onPreview?: (thread: MailThread) => void } = {}): Promise<MailThread> {
   if (!/^\d+$/.test(topicId)) throw new Error("Invalid HEY topic ID.");
   const executable = await findExecutable("hey", env);
   if (!executable) throw new Error("HEY CLI is unavailable.");
 
+  // Start the two body reads before attachment enrichment. Neither attachments
+  // nor richer formatting should hold an already-readable message off screen.
+  const jsonRequest = runFile(executable, threadCommand(topicId), { env, timeoutMs: 20_000 });
+  const htmlRequest = options.includeHtml
+    ? runFile(executable, threadCommand(topicId, "html"), { env, timeoutMs: 30_000 }).then((result) => {
+      if (!result.stdout.trim()) throw new Error("Empty HTML response");
+      return { rich: parseThreadHtmlDocument(result.stdout) };
+    }).catch(() => ({ bodyError: "Message formatting couldn’t be loaded. Reload the conversation to try again, or open it in HEY." }))
+    : undefined;
   const attachmentRequest = listMailAttachments(topicId, env).then(
     (attachments) => ({ attachments }),
     () => ({ attachmentsError: "Attachments couldn’t be loaded. Reload the conversation to try again." }),
   );
-  const htmlRequest = options.includeHtml
-    ? runFile(executable, threadCommand(topicId, "html"), { env, timeoutMs: 30_000 }).then((result) => result.stdout).catch(() => undefined)
-    : undefined;
-  const { stdout } = await runFile(executable, threadCommand(topicId), {
-    env,
-    timeoutMs: 20_000,
-  });
+  const { stdout } = await jsonRequest;
   const parsedThread = parseThreadJson(topicId, stdout);
-  const attachmentResult = await attachmentRequest;
-  const thread = "attachments" in attachmentResult
-    ? withMailAttachments(parsedThread, attachmentResult.attachments)
-    : { ...parsedThread, ...attachmentResult };
-  if (!htmlRequest) return thread;
-
-  const html = await htmlRequest;
-  if (!html) return thread;
-  const rich = parseThreadHtmlDocument(html);
-  return {
-    ...thread,
-    entries: thread.entries.map((entry) => {
-      const parsed = rich.get(entry.id);
-      if (!parsed) return entry;
-      const { senderName, occurredAt, attachmentNames, ...body } = parsed;
-      return {
-        ...entry,
-        ...body,
-        sender: applyExplicitSenderName(entry.sender, senderName),
-        ...(occurredAt ? { occurredAt: normalizeHeyTimestamp(occurredAt) } : {}),
-      };
-    }),
-    ...([...rich.entries()].some(([id, parsed]) => parsed.attachmentNames?.some((name) =>
-      !thread.entries.find((entry) => entry.id === id)?.attachments?.some((file) => file.filename === attachmentFilename(name))))
-      ? { attachmentsError: thread.attachmentsError ?? "Some attachment details are missing. Reload the conversation to try again, or open it in HEY." } : {}),
+  // HEY sometimes uses this sentinel for an entire HTML email, not a file.
+  // Never flash it as a readable message while the real HTML body is pending.
+  let thread: MailThread = {
+    ...parsedThread,
+    entries: parsedThread.entries.map((entry) => /^(?:📎\s*)?attachment\s*$/i.test(entry.body.trim()) ? { ...entry, body: "" } : entry),
+    ...(htmlRequest ? { bodyLoading: true } : {}),
+    attachmentsLoading: true,
   };
+  const emitPreview = () => {
+    if (!thread.entries.some((entry) => entry.body.trim() || entry.html)) return;
+    try { options.onPreview?.(thread); } catch { /* A closed reader must not fail its network read. */ }
+  };
+  emitPreview();
+  let rich: ReturnType<typeof parseThreadHtmlDocument> | undefined;
+  const enrichedBody = htmlRequest?.then((result) => {
+    rich = "rich" in result ? result.rich : undefined;
+    const { bodyLoading: _loading, ...current } = thread;
+    thread = {
+      ...current,
+      ...("bodyError" in result ? { bodyError: result.bodyError } : {}),
+      entries: current.entries.map((entry) => {
+        const parsed = rich?.get(entry.id);
+        if (!parsed) return entry;
+        const { senderName, occurredAt, attachmentNames: _names, ...body } = parsed;
+        return {
+          ...entry, ...body,
+          sender: applyExplicitSenderName(entry.sender, senderName),
+          ...(occurredAt ? { occurredAt: normalizeHeyTimestamp(occurredAt) } : {}),
+        };
+      }),
+    };
+    emitPreview();
+  });
+  const enrichedAttachments = attachmentRequest.then((result) => {
+    const { attachmentsLoading: _loading, ...current } = thread;
+    thread = "attachments" in result ? withMailAttachments(current, result.attachments) : { ...current, ...result };
+    emitPreview();
+  });
+  await Promise.all([enrichedBody, enrichedAttachments]);
+  if (rich && [...rich.entries()].some(([id, parsed]) => parsed.attachmentNames?.some((name) =>
+    !thread.entries.find((entry) => entry.id === id)?.attachments?.some((file) => file.filename === attachmentFilename(name))))) {
+    thread = { ...thread, attachmentsError: thread.attachmentsError ?? "Some attachment details are missing. Reload the conversation to try again, or open it in HEY." };
+  }
+  if (thread.entries.some((entry) => !entry.body.trim() && !entry.html && !entry.attachments?.length
+    && /^(?:📎\s*)?attachment\s*$/i.test(parsedThread.entries.find((original) => original.id === entry.id)?.body.trim() ?? ""))) {
+    thread = { ...thread, bodyError: "The message body couldn’t be loaded. Reload the conversation to try again, or open it in HEY." };
+  }
+  return thread;
 }
 
 export function parseThreadJson(topicId: string, stdout: string): MailThread {

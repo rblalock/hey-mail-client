@@ -24,7 +24,7 @@ async function setup(options = policy) {
   const cache = new MailDiskCache(root, options, () => now);
   return { directory, root, cache, advance: (milliseconds: number) => { now += milliseconds; } };
 }
-const store = (cache: MailDiskCache, value = thread(), account = profile()) => cache.write(account, value, cache.generation);
+const store = (cache: MailDiskCache, value = thread(), account = profile()) => cache.write(account, value, cache.token(account, value.topicId));
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
 describe("bounded private mail disk cache", () => {
@@ -109,6 +109,9 @@ describe("bounded private mail disk cache", () => {
   it("does not store partial/error results, empty threads, oversized threads or arbitrary blobs", async () => {
     const { cache } = await setup();
     expect(await store(cache, { ...thread(), attachmentsError: "Loading failed" })).toBe(false);
+    expect(await store(cache, { ...thread(), bodyError: "Loading failed" })).toBe(false);
+    expect(await store(cache, { ...thread(), bodyLoading: true })).toBe(false);
+    expect(await store(cache, { ...thread(), attachmentsLoading: true })).toBe(false);
     expect(await store(cache, { ...thread(), entries: [] })).toBe(false);
     expect(await store(cache, thread("21", "x".repeat(5 * 1024 * 1024)))).toBe(false);
     const extra = { ...thread(), downloadedFile: "/tmp/not-cache-data" };
@@ -154,8 +157,8 @@ describe("bounded private mail disk cache", () => {
   it("clear invalidates queued and late network writes, while later new reads may populate again", async () => {
     const { cache } = await setup();
     await store(cache);
-    const oldGeneration = cache.generation;
-    const pending = cache.write(profile(), thread("22"), oldGeneration);
+    const oldGeneration = cache.token(profile(), "23");
+    const pending = cache.write(profile(), thread("22"), cache.token(profile(), "22"));
     const cleared = cache.clear();
     expect(await pending).toBe(false);
     await cleared;
@@ -168,7 +171,7 @@ describe("bounded private mail disk cache", () => {
     const { cache } = await setup();
     await store(cache);
     await store(cache, thread("22"), profile("102"));
-    const oldGeneration = cache.generation;
+    const oldGeneration = cache.token(profile(), "21");
     await cache.configure({ ...policy, enabled: false });
     expect(await cache.stats()).toEqual({ entries: 0, bytes: 0 });
     expect(await store(cache)).toBe(false);
@@ -181,11 +184,51 @@ describe("bounded private mail disk cache", () => {
     const { cache } = await setup();
     await store(cache);
     await store(cache, thread("22"));
-    const oldGeneration = cache.generation;
+    const oldGeneration = cache.token(profile(), "21");
     await cache.remove(profile(), "21");
     expect(await cache.read(profile(), "21")).toBeUndefined();
     expect(await cache.read(profile(), "22")).toBeDefined();
     expect(await cache.write(profile(), thread(), oldGeneration)).toBe(false);
+  });
+
+  it("preserves unrelated queued reads and in-flight writes when another topic is removed", async () => {
+    const { cache } = await setup();
+    await store(cache);
+    await store(cache, thread("22"));
+    const token = cache.token(profile(), "22");
+    const read = cache.read(profile(), "22");
+    const write = cache.write(profile(), thread("22", "Fresh result"), token);
+    const removed = cache.remove(profile(), "21");
+    expect((await read)?.thread.topicId).toBe("22");
+    expect(await write).toBe(true);
+    await removed;
+    expect(cache.token(profile(), "22")).toBe(token);
+    expect((await cache.read(profile(), "22"))?.thread.entries[0]?.body).toBe("Fresh result");
+    expect(await cache.read(profile(), "21")).toBeUndefined();
+  });
+
+  it("rejects queued reads and writes for the removed topic, then allows a fresh request", async () => {
+    const { cache } = await setup();
+    await store(cache);
+    const token = cache.token(profile(), "21");
+    const read = cache.read(profile(), "21");
+    const write = cache.write(profile(), thread(), token);
+    const removed = cache.remove(profile(), "21");
+    expect(await read).toBeUndefined();
+    expect(await write).toBe(false);
+    await removed;
+    expect(await cache.write(profile(), thread(), token)).toBe(false);
+    expect(await store(cache, thread("21", "Fetched after removal"))).toBe(true);
+  });
+
+  it("binds write tokens and removal to the exact profile and topic", async () => {
+    const { cache } = await setup();
+    const other = profile("102");
+    const token = cache.token(other, "21");
+    await cache.remove(profile(), "21");
+    expect(await cache.write(other, thread(), token)).toBe(true);
+    expect(await cache.write(profile(), thread(), token)).toBe(false);
+    expect(await cache.write(other, thread("22"), token)).toBe(false);
   });
 
   it("clears one profile without deleting another account or server's cache", async () => {
@@ -194,7 +237,7 @@ describe("bounded private mail disk cache", () => {
     await store(cache, thread("22"));
     await store(cache, thread(), profile("102"));
     await store(cache, thread(), profile("101", "https://example.test"));
-    const oldGeneration = cache.generation;
+    const oldGeneration = cache.token(profile(), "21");
     await cache.clearProfile(profile());
     expect(await cache.read(profile(), "21")).toBeUndefined();
     expect(await cache.read(profile(), "22")).toBeUndefined();

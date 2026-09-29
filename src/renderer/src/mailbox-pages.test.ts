@@ -30,4 +30,19 @@ describe("mailbox page reconciliation", () => {
     const failure = { ...fresh, status: "unavailable" as const, detail: "Offline" };
     expect(refreshMailboxHead(first, failure, true)).toBe(failure);
   });
+  it("keeps unread older pages in native mailboxes when only the head refreshes", () => {
+    const old = { ...page([posting("1", false, 22), posting("2", false, 21), posting("3", false, 19)], "four"), boxKey: "feedbox" as const };
+    const head = { ...page([posting("4", false, 23), posting("1", false, 22)], "two"), boxKey: "feedbox" as const };
+    expect(refreshMailboxHead(old, head, true, true)).toMatchObject({ nextPage: "four", postings: [posting("4", false, 23), posting("1", false, 22), posting("2", false, 21), posting("3", false, 19)] });
+  });
+  it("retains later Imbox groups while the first page still contains only pending mail", () => {
+    const old = page([posting("1", false, 22), posting("2", false, 21), posting("3", true, 25)], "four");
+    const head = page([posting("4", false, 23), posting("1", false, 22)], "two");
+    expect(refreshMailboxHead(old, head, true, true).postings.map((row) => row.id)).toEqual(["4", "1", "2", "3"]);
+  });
+  it("does not keep missing active mail ahead of a refreshed Previously Seen boundary", () => {
+    const old = page([posting("1", false, 22), posting("2", true, 21), posting("3", true, 19)], "four");
+    const head = page([posting("2", true, 21)], "two");
+    expect(refreshMailboxHead(old, head, true, true).postings.map((row) => row.id)).toEqual(["2", "3"]);
+  });
 });

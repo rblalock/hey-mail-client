@@ -59,6 +59,71 @@ describe("received attachment metadata", () => {
 });
 
 describe("thread loading", () => {
+  it("publishes readable text and then rich HTML without waiting for slow attachments", async () => {
+    let finishHtml!: (value: { stdout: string; stderr: string }) => void;
+    let finishAttachments!: (value: { stdout: string; stderr: string }) => void;
+    vi.mocked(runFile).mockImplementation(async (_command, args) => {
+      if (args[0] === "attachment") return new Promise((resolve) => { finishAttachments = resolve; });
+      if (args.includes("--html")) return new Promise((resolve) => { finishHtml = resolve; });
+      return response({ entries: [{ id: 42, plain_text: "Readable before enrichment" }] });
+    });
+    const preview = vi.fn();
+    const finished = vi.fn();
+    const result = readThread("21", process.env, { includeHtml: true, onPreview: preview }).then((thread) => { finished(thread); return thread; });
+    await vi.waitFor(() => expect(preview).toHaveBeenCalledWith(expect.objectContaining({ bodyLoading: true, attachmentsLoading: true })));
+    expect(preview.mock.calls[0]?.[0].entries[0].body).toBe("Readable before enrichment");
+    expect(finished).not.toHaveBeenCalled();
+    finishHtml({ stdout: '<article data-entry-id="42"><style>p{color:red}</style><p>Rich body</p></article>', stderr: "" });
+    await vi.waitFor(() => expect(preview.mock.calls.at(-1)?.[0].entries[0].html).toContain("Rich body"));
+    expect(preview.mock.calls.at(-1)?.[0].attachmentsLoading).toBe(true);
+    expect(finished).not.toHaveBeenCalled();
+    finishAttachments(response([rawFile]));
+    expect((await result).entries[0]?.attachments).toEqual([file]);
+    expect((await result).attachmentsLoading).toBeUndefined();
+    expect((await result).bodyLoading).toBeUndefined();
+  });
+  it("does not publish the generic attachment sentinel before an HTML wrapper is expanded", async () => {
+    let finishHtml!: (value: { stdout: string; stderr: string }) => void;
+    let jsonRead!: () => void;
+    const didReadJson = new Promise<void>((resolve) => { jsonRead = resolve; });
+    vi.mocked(runFile).mockImplementation(async (_command, args) => {
+      if (args[0] === "attachment") return response([]);
+      if (args.includes("--html")) return new Promise((resolve) => { finishHtml = resolve; });
+      jsonRead(); return response([{ id: 42, body: "📎 attachment" }]);
+    });
+    const preview = vi.fn();
+    const result = readThread("21", process.env, { includeHtml: true, onPreview: preview });
+    await didReadJson;
+    await Promise.resolve();
+    expect(preview).not.toHaveBeenCalled();
+    finishHtml({ stdout: '<article data-entry-id="42"><action-text-attachment content-type="text/html" content="&lt;p&gt;Actual receipt&lt;/p&gt;"></action-text-attachment></article>', stderr: "" });
+    expect((await result).entries[0]?.html).toContain("Actual receipt");
+    expect(preview.mock.calls.every(([value]) => value.entries[0].body !== "📎 attachment")).toBe(true);
+  });
+  it("keeps readable text and reports HTML failures independently of attachments", async () => {
+    vi.mocked(runFile).mockImplementation(async (_command, args) => {
+      if (args[0] === "attachment") return response([rawFile]);
+      if (args.includes("--html")) throw Error("format read failed");
+      return response([{ id: 42, body: "Readable fallback" }]);
+    });
+    const thread = await readThread("21", process.env, { includeHtml: true });
+    expect(thread.bodyError).toContain("formatting couldn’t be loaded");
+    expect(thread.entries[0]).toMatchObject({ body: "Readable fallback", attachments: [file] });
+    expect(thread.attachmentsError).toBeUndefined();
+  });
+  it("reports an unreadable HTML wrapper explicitly instead of finalizing an attachment placeholder", async () => {
+    vi.mocked(runFile).mockImplementation(async (_command, args) => {
+      if (args[0] === "attachment") return response([]);
+      if (args.includes("--html")) throw Error("offline");
+      return response([{ id: 42, body: "📎 attachment" }]);
+    });
+    const preview = vi.fn();
+    const thread = await readThread("21", process.env, { includeHtml: true, onPreview: preview });
+    expect(thread.entries[0]?.body).toBe("");
+    expect(thread.bodyError).toContain("message body couldn’t be loaded");
+    expect(thread.attachmentsError).toBeUndefined();
+    expect(preview).not.toHaveBeenCalled();
+  });
   it("warns about genuinely missing files without assuming the CLI needs an upgrade", async () => {
     vi.mocked(runFile).mockImplementation(async (_command, args) => {
       if (args[0] === "attachment") return response([]);

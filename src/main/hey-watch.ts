@@ -2,6 +2,7 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import type { MailWatchChange } from "../shared/contracts";
 import { findExecutable } from "./process";
+import { mailContentVersion } from "./mail-change-tracker";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -28,6 +29,7 @@ export function parseWatchLine(line: string): MailWatchChange | undefined {
     ...(text(value.posting_id) ? { postingId: text(value.posting_id) } : {}),
     ...(text(value.thread_id) ? { topicId: text(value.thread_id) } : {}),
     ...(typeof value.new === "boolean" ? { isNew: value.new } : {}),
+    ...(mailContentVersion(posting) ? { contentVersion: mailContentVersion(posting) } : {}),
     ...((change === "added" || change === "updated") && typeof posting.seen === "boolean" ? { postingSeen: posting.seen } : {}),
   };
 }

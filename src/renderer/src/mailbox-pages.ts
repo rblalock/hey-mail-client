@@ -20,16 +20,18 @@ export function appendMailboxPage(current: ImboxResult, page: ImboxResult): Imbo
 }
 
 /** Refresh the live head without collapsing history the person already scrolled to. */
-export function refreshMailboxHead(current: ImboxResult | undefined, head: ImboxResult, historyLoaded: boolean): ImboxResult {
+export function refreshMailboxHead(current: ImboxResult | undefined, head: ImboxResult, historyLoaded: boolean, pagedAllMail = false): ImboxResult {
   if (!current || current.status !== "ready" || head.status !== "ready" || !historyLoaded || !head.nextPage) return head;
   const headIds = new Set(head.postings.map(identity));
-  const dates = head.postings.filter((posting) => posting.seen && !posting.bubbledUp)
+  const rank = (posting: ImboxPosting) => head.boxKey !== "imbox" ? 0 : posting.bubbledUp ? 0 : posting.seen ? 2 : 1;
+  const lastRank = head.postings.length ? Math.max(...head.postings.map(rank)) : 0;
+  const dates = head.postings.filter((posting) => pagedAllMail ? rank(posting) === lastRank : posting.seen && !posting.bubbledUp)
     .map((posting) => Date.parse(posting.createdAt)).filter(Number.isFinite);
   const oldestHead = dates.length ? Math.min(...dates) : undefined;
   // Only retain older history, never stale active rows removed by a move/read on
   // another device. Watch deletion events remove older rows separately.
-  const history = current.postings.filter((posting) => posting.seen && !posting.bubbledUp
+  const history = current.postings.filter((posting) => (pagedAllMail || posting.seen && !posting.bubbledUp)
     && !headIds.has(identity(posting))
-    && (oldestHead === undefined || Date.parse(posting.createdAt) < oldestHead));
+    && (pagedAllMail && rank(posting) > lastRank || (oldestHead === undefined || Date.parse(posting.createdAt) < oldestHead) && (!pagedAllMail || rank(posting) === lastRank)));
   return { ...head, nextPage: current.nextPage, postings: [...head.postings, ...history] };
 }

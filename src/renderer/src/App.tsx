@@ -35,6 +35,7 @@ import ThreadPanel from "./components/ThreadPanel";
 import ThreadListingView from "./components/ThreadListingView";
 import RailMorphButton from "./components/RailMorphButton";
 import { MailThreadCache } from "./mail-thread-cache";
+import { MailPrefetchQueue } from "./mail-prefetch-queue";
 import { bulkMutationRequest, isBulkMutationCommand, prioritizeBulkCommands } from "./bulk-actions";
 import { mailToggle } from "./mail-toggles";
 import { appendMailboxPage, refreshMailboxHead } from "./mailbox-pages";
@@ -154,9 +155,9 @@ export default function App() {
   const [visibleSectionPostings, setVisibleSectionPostings] = useState<ImboxPosting[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historyError, setHistoryError] = useState<string>();
-  const historyLoaded = useRef(false);
+  const historyLoaded = useRef(new Set<MailboxKey>());
   const historyRequest = useRef<symbol | undefined>(undefined);
-  const historyCursors = useRef(new Set<string>());
+  const historyCursors = useRef(new Map<MailboxKey, Set<string>>());
   const readerSequence = useRef<string[]>([]);
   const mutationBusy = useRef(false);
   const [theme, setTheme] = useState<ThemeSnapshot>();
@@ -174,7 +175,10 @@ export default function App() {
   const requestSequence = useRef<Partial<Record<MailboxKey, number>>>({});
   const listingRequestSequence = useRef(0);
   const threadCache = useRef(new MailThreadCache(10)).current;
-  const prefetchBusy = useRef(false);
+  const [readTogetherVisibleTopics, setReadTogetherVisibleTopics] = useState<string[]>([]);
+  const prefetchedNeighbors = useRef<string | undefined>(undefined);
+  const updateReadTogetherVisibleTopics = useCallback((topics: string[]) => setReadTogetherVisibleTopics((current) => current.join(",") === topics.join(",") ? current : topics), []);
+  const historyPageTurn = useRef(0);
   const readTogetherRef = useRef<ReadTogetherHandle>(null);
   const readTogetherThreadsRef = useRef<Record<string, MailThread | undefined>>({});
   const visibleTopicIds = useRef<Set<string>>(new Set());
@@ -193,7 +197,7 @@ export default function App() {
   const accountKey = `${window.heyAgent.profiles.current.active?.key ?? "unavailable"}:${window.heyAgent.profiles.current.token}`;
   const splitDefinition = JSON.stringify(namedSplit) ?? "";
   const splitMail = useSplitMail(accountSplit ? splitId : undefined, splitDefinition, accountKey);
-  const membershipSignature = useMemo(() => JSON.stringify(splitState.memberships), [splitState.memberships]);
+  const membershipSignature = useMemo(() => JSON.stringify([splitState.memberships, splitState.loadingMemberships, splitState.errors]), [splitState.memberships, splitState.loadingMemberships, splitState.errors]);
   const previousMemberships = useRef(membershipSignature);
   useEffect(() => {
     if (previousMemberships.current === membershipSignature) return;
@@ -210,8 +214,12 @@ export default function App() {
     while (splitViewStates.size > 12) splitViewStates.delete(splitViewStates.keys().next().value!);
     return state;
   }, [sectionedImbox, splitId, splitDefinition, splitViewStates]);
-  const layoutRef = useRef(paginatedImbox);
-  layoutRef.current = paginatedImbox;
+  const activeMailboxRef = useRef(activeMailbox);
+  activeMailboxRef.current = activeMailbox;
+  const visibleMailboxes = useRef<MailboxKey[]>([]);
+  visibleMailboxes.current = accountSplit ? [] : sectionedImbox ? ["imbox", "laterbox", "asidebox", "bubblebox"] : activeMailbox ? [activeMailbox] : [];
+  const mailboxRefreshedAt = useRef(new Map<MailboxKey, number>());
+  const overviewRequest = useRef(0);
   const mailboxState = useRef(mailboxes);
   mailboxState.current = mailboxes;
   const trash = useTrashQueue((request) => {
@@ -247,7 +255,8 @@ export default function App() {
     if (result?.boxKey !== "imbox") return result;
     if (sectionedImbox) {
       const groups = groupSectionedImbox(viewSectionMailboxes, selected?.id === retainedActiveId ? retainedActiveId : undefined);
-      return { ...result, postings: [...groups.active, ...groups.replyLater, ...groups.setAside, ...groups.bubbledUp, ...groups.previouslySeen] };
+      const cursors = ["imbox", "laterbox", "asidebox", "bubblebox"].map((box) => viewSectionMailboxes[box as MailboxKey]?.nextPage ?? "");
+      return { ...result, nextPage: cursors.some(Boolean) ? JSON.stringify(cursors) : undefined, postings: [...groups.active, ...groups.replyLater, ...groups.setAside, ...groups.bubbledUp, ...groups.previouslySeen] };
     }
     const { bubbledUp, newForYou, previouslySeen } = groupImboxPostings(result.postings);
     return { ...result, postings: [...bubbledUp, ...newForYou, ...previouslySeen] };
@@ -269,6 +278,7 @@ export default function App() {
     });
   }, [splitViewState]);
   const imboxUnread = mailboxes.imbox?.postings.filter((posting) => !pendingTrashIds.has(posting.id) && !posting.seen && !posting.bubbledUp).length ?? 0;
+  const imboxUnreadPartial = Boolean(mailboxes.imbox?.nextPage && !mailboxes.imbox.postings.some((posting) => posting.seen && !posting.bubbledUp));
   const highlightedId = activeMailbox ? mailboxCursor[activeMailbox] : undefined;
   useEffect(() => { if (splitViewState && highlightedId) splitViewState.highlightedId = highlightedId; }, [splitViewState, highlightedId]);
   const loading = accountSplit ? splitMail.loading : activeMailbox ? Boolean(loadingMailboxes[activeMailbox]) : false;
@@ -284,7 +294,7 @@ export default function App() {
   readTogetherThreadsRef.current = readTogetherThreads;
   visibleTopicIds.current = new Set([
     ...(selected?.topicId ? [selected.topicId] : []),
-    ...readTogetherPostings.flatMap((posting) => posting.topicId ? [posting.topicId] : []),
+    ...(readTogether ? readTogetherVisibleTopics : []),
   ]);
 
   useEffect(() => {
@@ -316,24 +326,20 @@ export default function App() {
     setCompactNavigationExpanded(compactAgentLayout && open);
   }, [compactAgentLayout, toggleNavigation]);
 
-  const refreshMailbox = useCallback(async (box: MailboxKey) => {
+  const refreshMailbox = useCallback(async (box: MailboxKey, force = false) => {
     const sequence = (requestSequence.current[box] ?? 0) + 1;
     requestSequence.current[box] = sequence;
-    if (box === "imbox") {
+    if (box === activeMailboxRef.current) {
       historyRequest.current = undefined;
       setLoadingHistory(false);
       setHistoryError(undefined);
     }
     setLoadingMailboxes((current) => ({ ...current, [box]: true }));
     try {
-      const [result, nextOverview] = await Promise.all([
-        window.heyAgent.mail.listMailbox(box, box === "imbox" && paginatedImbox ? { paginated: true } : undefined),
-        box === "imbox" ? window.heyAgent.mail.getOverview() : Promise.resolve(undefined),
-      ]);
-      if (sequence !== requestSequence.current[box] || box === "imbox" && layoutRef.current !== paginatedImbox) return;
-      setMailboxes((current) => ({ ...current, [box]: box === "imbox" && paginatedImbox
-        ? refreshMailboxHead(current.imbox, result, historyLoaded.current) : result }));
-      if (nextOverview) setOverview(nextOverview);
+      const result = await window.heyAgent.mail.listMailbox(box, { paginated: true, singlePage: true, ...(force ? { refresh: true } : {}) });
+      if (sequence !== requestSequence.current[box]) return;
+      setMailboxes((current) => ({ ...current, [box]: refreshMailboxHead(current[box], result, historyLoaded.current.has(box), true) }));
+      if (result.status === "ready") mailboxRefreshedAt.current.set(box, Date.now());
     } catch (reason) {
       if (sequence === requestSequence.current[box]) {
         const detail = reason instanceof Error ? reason.message : "Unable to refresh mail.";
@@ -343,35 +349,45 @@ export default function App() {
     } finally {
       if (sequence === requestSequence.current[box]) setLoadingMailboxes((current) => ({ ...current, [box]: false }));
     }
-  }, [paginatedImbox]);
+  }, []);
 
-  const loadMoreHistory = useCallback(async () => {
-    const current = mailboxState.current.imbox;
+  const loadMoreHistory = useCallback(async (options?: { includeHistory: boolean }) => {
+    const navigationBox = activeMailbox;
+    if (!navigationBox) return;
+    const needActivePrefix = !mailboxState.current.imbox?.postings.some((posting) => posting.seen && !posting.bubbledUp);
+    const candidates: MailboxKey[] = sectionedImbox
+      ? [...(options?.includeHistory !== false || needActivePrefix ? ["imbox" as const] : []), "laterbox", "asidebox", "bubblebox"] : [navigationBox];
+    const remaining = candidates.filter((candidate) => mailboxState.current[candidate]?.nextPage);
+    const box = remaining[historyPageTurn.current % Math.max(1, remaining.length)];
+    if (!box) return;
+    const current = mailboxState.current[box];
     const cursor = current?.nextPage;
-    if (!sectionedImbox || selected || readTogether || threadListing || loadingMailboxes.imbox || historyRequest.current || !current || !cursor) return;
-    if (historyCursors.current.has(cursor)) {
-      setHistoryError("HEY returned a repeated history page. Refresh the Imbox to continue.");
+    if (accountSplit || selected || readTogether || threadListing || loadingMailboxes[box] || historyRequest.current || !current || !cursor) return;
+    if (historyCursors.current.get(box)?.has(cursor)) {
+      setHistoryError("HEY returned a repeated history page. Refresh this mailbox to continue.");
       return;
     }
     const token = Symbol();
     historyRequest.current = token;
-    const sequence = requestSequence.current.imbox;
+    const sequence = requestSequence.current[box];
     setLoadingHistory(true);
     setHistoryError(undefined);
     try {
-      const page = await window.heyAgent.mail.listMailbox("imbox", { paginated: true, page: cursor });
-      if (historyRequest.current !== token || requestSequence.current.imbox !== sequence || !layoutRef.current) return;
+      const page = await window.heyAgent.mail.listMailbox(box, { paginated: true, singlePage: true, page: cursor });
+      if (historyRequest.current !== token || requestSequence.current[box] !== sequence || activeMailboxRef.current !== navigationBox) return;
       if (page.status !== "ready") throw new Error(page.detail ?? "Unable to load older mail.");
-      if (page.nextPage === cursor) throw new Error("HEY returned a repeated history page. Refresh the Imbox to continue.");
-      historyCursors.current.add(cursor);
-      historyLoaded.current = true;
-      setMailboxes((mail) => ({ ...mail, imbox: mail.imbox ? appendMailboxPage(mail.imbox, page) : page }));
+      if (page.nextPage === cursor) throw new Error("HEY returned a repeated history page. Refresh this mailbox to continue.");
+      if (!historyCursors.current.has(box)) historyCursors.current.set(box, new Set());
+      historyCursors.current.get(box)!.add(cursor);
+      historyLoaded.current.add(box);
+      historyPageTurn.current++;
+      setMailboxes((mail) => ({ ...mail, [box]: mail[box] ? appendMailboxPage(mail[box]!, page) : page }));
     } catch (reason) {
-      if (historyRequest.current === token && requestSequence.current.imbox === sequence) setHistoryError(reason instanceof Error ? reason.message : "Unable to load older mail.");
+      if (historyRequest.current === token && requestSequence.current[box] === sequence) setHistoryError(reason instanceof Error ? reason.message : "Unable to load older mail.");
     } finally {
       if (historyRequest.current === token) { historyRequest.current = undefined; setLoadingHistory(false); }
     }
-  }, [sectionedImbox, selected, readTogether, threadListing, loadingMailboxes.imbox]);
+  }, [activeMailbox, sectionedImbox, accountSplit, selected, readTogether, threadListing, loadingMailboxes]);
 
   const updateImboxLayout = useCallback(async (imboxLayout: "hey" | "sectioned") => {
     try { setSettings(await window.heyAgent.settings.update({ imboxLayout })); }
@@ -461,7 +477,14 @@ export default function App() {
       });
     }
     try {
-      const thread = await threadCache.read(topicId, (id) => window.heyAgent.mail.readThread(id), options.force,
+      const thread = await threadCache.read(topicId, async (id, onPreview) => {
+        const requestId = crypto.randomUUID();
+        const unsubscribe = window.heyAgent.mail.subscribeThreadPreview(({ requestId: incoming, thread }) => {
+          if (incoming === requestId && thread.topicId === id) onPreview?.(thread);
+        });
+        try { return await window.heyAgent.mail.readThread(id, requestId); }
+        finally { unsubscribe(); }
+      }, options.force,
         (id) => window.heyAgent.mail.readCachedThread(id),
         (preview) => {
           setThreadCacheRevision((value) => value + 1);
@@ -489,12 +512,10 @@ export default function App() {
     }
   }, [threadCache]);
 
-  const prefetchThread = useCallback(async (topicId: string) => {
-    if (prefetchBusy.current) return;
-    prefetchBusy.current = true;
-    try { await loadThread(topicId); }
-    finally { prefetchBusy.current = false; }
-  }, [loadThread]);
+  const prefetchQueue = useMemo(() => new MailPrefetchQueue((topicId) => loadThread(topicId)), [loadThread]);
+  const prefetchThread = useCallback((topicId: string) => prefetchQueue.enqueue(topicId), [prefetchQueue]);
+  useEffect(() => () => prefetchQueue.clearPending(), [prefetchQueue]);
+  useEffect(() => { if (!settings.mailCache.enabled || !settings.mailCache.prefetch) prefetchQueue.clearPending(); }, [prefetchQueue, settings.mailCache.enabled, settings.mailCache.prefetch]);
 
   const refresh = useCallback(async () => {
     if (selected?.topicId) {
@@ -519,13 +540,14 @@ export default function App() {
     }
     // Explicit refresh restarts a stalled cursor; routine mail updates preserve
     // already loaded history so the reader does not lose their scroll position.
-    if (sectionedImbox) {
-      historyCursors.current.clear();
-      historyLoaded.current = false;
+    if (activeMailbox) {
+      historyCursors.current.delete(activeMailbox);
+      historyLoaded.current.delete(activeMailbox);
       if (enabledSplits.length) void window.heyAgent.mail.refreshSplits().then((state) => { setSplitState(state); setSplitLoadError(undefined); }).catch((reason: unknown) => setSplitLoadError(reason instanceof Error ? reason.message : "Unable to refresh splits."));
     }
-    await refresh();
-  }, [refresh, sectionedImbox, enabledSplits.length, accountSplit, splitMail.refresh]);
+    await Promise.all(visibleMailboxes.current.map((box) => refreshMailbox(box, true)));
+    if (selected?.topicId) { threadCache.invalidate(selected.topicId, true); void loadThread(selected.topicId, { force: true, reportError: true }); }
+  }, [refreshMailbox, activeMailbox, selected?.topicId, threadCache, loadThread, enabledSplits.length, accountSplit, splitMail.refresh]);
 
   const loadThreadListing = useCallback(async (kind: MailThreadListing["kind"], id: string, preserve = false) => {
     const sequence = ++listingRequestSequence.current;
@@ -565,56 +587,63 @@ export default function App() {
   useEffect(() => installSoundUnlock(), []);
 
   useEffect(() => {
-    historyLoaded.current = false;
-    historyCursors.current.clear();
     historyRequest.current = undefined;
     readerSequence.current = [];
     setLoadingHistory(false);
     setHistoryError(undefined);
     setRetainedActiveId(undefined);
     setVisibleSectionPostings([]);
-    requestSequence.current.imbox = (requestSequence.current.imbox ?? 0) + 1;
-    setMailboxes((current) => { const next = { ...current }; delete next.imbox; return next; });
-  }, [paginatedImbox]);
+  }, [activeMailbox, paginatedImbox]);
 
   useEffect(() => {
-    if (settingsReady && activeMailbox) void refreshMailbox(activeMailbox);
-  }, [activeMailbox, refreshMailbox, settingsReady]);
+    if (settingsReady && activeMailbox && !accountSplit && Date.now() - (mailboxRefreshedAt.current.get(activeMailbox) ?? 0) > 30_000) void refreshMailbox(activeMailbox);
+  }, [activeMailbox, accountSplit, refreshMailbox, settingsReady]);
 
   useEffect(() => {
-    if (!settingsReady) return;
+    if (!settingsReady || !sectionedImbox || accountSplit) return;
     const timer = setTimeout(() => {
-      for (const box of MAILBOX_KEYS) {
-        if (box !== "imbox") void refreshMailbox(box);
+      for (const box of ["laterbox", "asidebox", "bubblebox"] as const) {
+        if (Date.now() - (mailboxRefreshedAt.current.get(box) ?? 0) > 30_000) void refreshMailbox(box);
       }
     }, 250);
     return () => clearTimeout(timer);
-  }, [refreshMailbox, settingsReady]);
+  }, [refreshMailbox, settingsReady, sectionedImbox, accountSplit]);
+
+  // Badges and the Screener are not prerequisites for the visible mail list.
+  useEffect(() => {
+    if (!settingsReady || activeMailbox !== "imbox" || accountSplit) return;
+    const request = ++overviewRequest.current;
+    const timer = setTimeout(() => void window.heyAgent.mail.getOverview().then((value) => {
+      if (overviewRequest.current === request) setOverview(value);
+    }).catch(() => undefined), 500);
+    return () => { clearTimeout(timer); overviewRequest.current++; };
+  }, [settingsReady, activeMailbox, accountSplit]);
 
   useEffect(() => {
     if (!loading && (!accountSplit || !splitMail.nextPage) && !readerOrigin && selected && mailbox && !mailbox.postings.some((posting) => posting.id === selected.id)) setSelected(undefined);
   }, [loading, accountSplit, splitMail.nextPage, mailbox, readerOrigin, selected]);
 
   useEffect(() => {
+    prefetchQueue.clearPending();
+    prefetchedNeighbors.current = undefined;
     if (!selected?.topicId) return;
-    let cancelled = false;
-    void loadThread(selected.topicId, { reportError: true }).then((loaded) => {
-      if (!loaded || cancelled) return;
-      const postings = mailbox?.postings ?? [];
-      const index = postings.findIndex((posting) => posting.id === selected.id);
-      // Opt-in background work, one neighbor at a time. Detached search/library
-      // readers must never prefetch an unrelated mailbox's first item.
-      if (settings.mailCache.enabled && settings.mailCache.prefetch && !readerOrigin && index >= 0) {
-        void (async () => {
-          for (const neighbor of [postings[index + 1], postings[index - 1]]) {
-            if (cancelled) return;
-            if (neighbor?.topicId) await prefetchThread(neighbor.topicId);
-          }
-        })();
-      }
-    });
-    return () => { cancelled = true; };
-  }, [loadThread, prefetchThread, mailbox, selected?.id, selected?.topicId, readerOrigin, settings.mailCache.enabled, settings.mailCache.prefetch]);
+    void loadThread(selected.topicId, { reportError: true });
+  }, [loadThread, prefetchQueue, selected?.topicId]);
+  useEffect(() => { prefetchQueue.clearPending(); }, [prefetchQueue, activeMailbox, readerOrigin, readTogether, searchOpen]);
+
+  // Begin nearby speculation once a usable preview is visible, not after slow
+  // attachment enrichment. Foreground reads never wait on this one-slot queue.
+  useEffect(() => {
+    if (!settings.mailCache.enabled || !settings.mailCache.prefetch || readerOrigin || !selected?.topicId || !threadCache.get(selected.topicId)) return;
+    const postings = mailbox?.postings ?? [];
+    const index = postings.findIndex((posting) => posting.id === selected.id);
+    if (index < 0) return;
+    const neighbors = [postings[index + 1]?.topicId, postings[index - 1]?.topicId].filter((id): id is string => Boolean(id));
+    const key = `${selected.topicId}:${neighbors.join(",")}`;
+    if (prefetchedNeighbors.current === key) return;
+    prefetchedNeighbors.current = key;
+    if (neighbors[0]) prefetchQueue.enqueue(neighbors[0], neighbors.slice(1));
+  }, [prefetchQueue, mailbox, selected?.id, selected?.topicId, readerOrigin, threadCache, threadCacheRevision, settings.mailCache.enabled, settings.mailCache.prefetch]);
 
   // Start warming the keyboard-highlighted row before Enter, without opening an
   // iframe or marking mail seen. Debouncing skips rows passed during key repeat.
@@ -630,7 +659,8 @@ export default function App() {
     if (!readTogether) return;
     let cancelled = false;
     let cursor = 0;
-    const topics = readTogetherPostings.flatMap((posting) => posting.topicId && (!readTogetherThreadsRef.current[posting.topicId] || !threadCache.isFresh(posting.topicId)) ? [posting.topicId] : []);
+    const available = new Set(readTogetherPostings.map((posting) => posting.topicId));
+    const topics = readTogetherVisibleTopics.filter((id) => available.has(id) && (!readTogetherThreadsRef.current[id] || !threadCache.isFresh(id)));
     const loadNext = async () => {
       while (!cancelled) {
         const topicId = topics[cursor];
@@ -642,7 +672,7 @@ export default function App() {
     };
     void Promise.all(Array.from({ length: Math.min(3, topics.length) }, loadNext));
     return () => { cancelled = true; };
-  }, [loadThread, readTogether, readTogetherPostings, threadCache]);
+  }, [loadThread, readTogether, readTogetherPostings, readTogetherVisibleTopics, threadCache]);
 
   useEffect(() => {
     if (!activeMailbox || sectionedImbox || !mailbox?.postings.length) return;
@@ -657,6 +687,7 @@ export default function App() {
     let resyncVersion = 0;
     const unsubscribe = window.heyAgent.mail.subscribe((change) => {
       setMailboxes((current) => applyWatchSeen(current, change));
+      if (change.metadataOnly || change.change === "ready" || change.change === "disconnected") return;
       if (change.change === "deleted" && change.postingId) {
         const id = change.postingId;
         setMailboxes((current) => Object.fromEntries(Object.entries(current).map(([key, box]) => [key,
@@ -689,11 +720,14 @@ export default function App() {
           }
         };
         void Promise.all(Array.from({ length: Math.min(3, topics.length) }, next));
-        for (const box of MAILBOX_KEYS) void refreshMailbox(box);
+        mailboxRefreshedAt.current.clear();
+        for (const box of visibleMailboxes.current) void refreshMailbox(box);
       }
       if (!change.box) return;
       const box = change.box.key as MailboxKey;
       if (!MAILBOX_KEYS.includes(box)) return;
+      mailboxRefreshedAt.current.delete(box);
+      if (!visibleMailboxes.current.includes(box)) return;
       const current = timers.get(box);
       if (current) clearTimeout(current);
       timers.set(box, setTimeout(() => void refreshMailbox(box), 120));
@@ -719,9 +753,7 @@ export default function App() {
     setLoadingMailboxes((current) => ({ ...current, ...Object.fromEntries([...sources].map((source) => [source, false])) }));
     setMailboxes((current) => applyOptimisticMailMutation(current, activeMailbox, undefined, request).mailboxes);
     splitMail.apply(request);
-    void window.heyAgent.mail.mutate(request).then(() => {
-      if (accountSplit) void splitMail.refresh();
-    }).catch((reason: unknown) => {
+    void window.heyAgent.mail.mutate(request).catch((reason: unknown) => {
       appSound.play("error", "mail");
       setNotice({ message: reason instanceof Error ? reason.message : "HEY could not mark these conversations as read." });
       setMailboxes((current) => applyOptimisticMailMutation(current, activeMailbox, undefined, { operation: "unseen", postingIds }).mailboxes);
@@ -1650,7 +1682,7 @@ export default function App() {
     <ShortcutContext value={shortcuts}>
     <main className="app-shell" data-compact-agent-layout={compactAgentLayout || undefined} data-navigation-overlay={navigation.overlay || undefined}>
       {navigation.overlay && <button type="button" tabIndex={-1} className="navigation-overlay-dismiss" aria-label="Close navigation sidebar" onClick={() => { appSound.play("drop", "interface"); setCompactNavigationExpanded(false); }} />}
-      <Sidebar active={active} imboxCount={imboxUnread} chats={agentWorkspace?.chats ?? []} activeChatId={agentWorkspace?.activeTabId} collapsed={navigation.collapsed} shortcuts={shortcuts} onNavigate={navigate} onCompose={() => { setCompactNavigationExpanded(false); appSound.play("open", "interface"); setComposer({ mode: "compose" }); }} onNewChat={() => { setCompactNavigationExpanded(false); newChat(); }} onOpenChat={(chatId) => { setCompactNavigationExpanded(false); openChat(chatId); }} onArchiveChat={archiveChat} onToggleCollapsed={toggleNavigation} />
+      <Sidebar active={active} imboxCount={imboxUnread} imboxCountPartial={imboxUnreadPartial} chats={agentWorkspace?.chats ?? []} activeChatId={agentWorkspace?.activeTabId} collapsed={navigation.collapsed} shortcuts={shortcuts} onNavigate={navigate} onCompose={() => { setCompactNavigationExpanded(false); appSound.play("open", "interface"); setComposer({ mode: "compose" }); }} onNewChat={() => { setCompactNavigationExpanded(false); newChat(); }} onOpenChat={(chatId) => { setCompactNavigationExpanded(false); openChat(chatId); }} onArchiveChat={archiveChat} onToggleCollapsed={toggleNavigation} />
       <div className="workspace-shell" inert={navigation.overlay || undefined}>
         <div className="workspace-row" data-agent-open={agentRailOpen}>
           <div className="primary-workspace" data-agent-open={agentRailOpen}>
@@ -1659,9 +1691,12 @@ export default function App() {
               : readerOrigin && selected ? <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={readerOrigin === "search" ? "Search results" : readerOrigin === "agent" ? "HEY Agent result" : readerOrigin === "bundle" ? threadListing?.listing?.title ?? "Bundle" : libraryReaderTitle} onOrganize={/^\d+$/.test(selected.id) || /^\d+$/.test(selected.topicId ?? "") ? () => setOrganizer({ postings: [selected] }) : undefined} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => undefined} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={0} onClose={closeReader} onPrevious={() => undefined} onNext={() => undefined} hasPrevious={false} hasNext={false} supplementalActions={addSelectedToSplit} showTraversal={false} onOpenObject={(object) => void openAgentObject(object)} />
               : activeMailbox ? <>
               <ImboxView
+                membershipLoading={accountSplit && splitMail.membershipLoading}
+                membershipError={accountSplit ? splitMail.membershipError : undefined}
                 key={`${accountKey}:${activeMailbox}:${sectionedImbox ? `${splitId}:${splitDefinition}` : "hey"}`}
                 mailboxKey={activeMailbox} showSenderAvatars={settings.showSenderAvatars}
                 sectioned={sectionedImbox} accountSplit={accountSplit} sectionMailboxes={viewSectionMailboxes}
+                hasSectionPages={!accountSplit && sectionedImbox && (["laterbox", "asidebox", "bubblebox"].some((box) => Boolean(viewSectionMailboxes[box as MailboxKey]?.nextPage)) || Boolean(viewSectionMailboxes.imbox?.nextPage && !viewSectionMailboxes.imbox.postings.some((posting) => posting.seen && !posting.bubbledUp)))}
                 retainedActiveId={selected?.id === retainedActiveId ? retainedActiveId : undefined}
                 retainedSourceBox={selected?.id === retainedActiveId ? selected?.sourceBox : undefined}
                 profileKey={`${window.heyAgent.profiles.current.active?.key ?? "default"}${sectionedImbox && splitId !== "all" ? `:split:${splitId}` : ""}`}
@@ -1687,7 +1722,7 @@ export default function App() {
                 onRefresh={() => void refreshFromToolbar()} onNavigate={navigate} setAsideGroupTarget={setAsideGroupTarget}
                 onSetAsideGroup={(request) => void updateSetAsideGroup(request)} hidden={Boolean(selected || readTogether || threadListing)} />
               {threadListing ? <ThreadListingView listing={threadListing.listing} loading={threadListing.loading} error={threadListing.error} onBack={() => { listingRequestSequence.current += 1; setThreadListing(undefined); }} onOpen={(posting) => openDetachedPosting(posting, "bundle")} onRetry={() => void loadThreadListing(threadListing.kind, threadListing.id, true)} onShowAll={threadListing.kind === "bundle" && threadListing.listing?.contact.id ? () => void loadThreadListing("contact", threadListing.listing!.contact.id!) : undefined} />
-                : readTogether && readTogetherItems.length > 0 ? <ReadTogetherView ref={readTogetherRef} items={readTogetherItems} sourceLabel={MAILBOX_LABELS[activeMailbox]} skippedCount={readTogether.skippedCount} onClose={closeReader} onRetryThread={(topicId) => void loadThread(topicId, { force: true, reportError: true }).then((thread) => { if (thread) setReadTogetherThreads((current) => ({ ...current, [topicId]: thread })); })} onOpenObject={(object) => void openAgentObject(object)} />
+                : readTogether && readTogetherItems.length > 0 ? <ReadTogetherView ref={readTogetherRef} items={readTogetherItems} sourceLabel={MAILBOX_LABELS[activeMailbox]} skippedCount={readTogether.skippedCount} onClose={closeReader} onVisibleTopicsChange={updateReadTogetherVisibleTopics} onRetryThread={(topicId) => void loadThread(topicId, { force: true, reportError: true }).then((thread) => { if (thread) setReadTogetherThreads((current) => ({ ...current, [topicId]: thread })); })} onOpenObject={(object) => void openAgentObject(object)} />
                 : selected && <ThreadPanel posting={selected} thread={selectedThread} threadError={selectedThreadError} sourceLabel={MAILBOX_LABELS[postingSource(selected)]} supplementalActions={<>{sectionedImbox && <button type="button" data-tooltip={accountSplit ? "Done" : "Done — move to Previously Seen"} data-shortcut-id="seen" onClick={() => runCommand("seen")}><Check size={14} /> Done</button>}{addSelectedToSplit}</>} mailActions={{ sourceBox: postingSource(selected), onMutate: (request) => void mutate(request), onForward: () => { appSound.play("forward", "interface"); setComposer({ mode: "forward", posting: selected }); }, onMailChanged: replyComplete }} onOrganize={() => setOrganizer({ postings: [selected] })} helperActions={mailHelperActions} onHelperAction={runCommand} onRefresh={() => void refresh()} onRetryThread={() => selected.topicId && void loadThread(selected.topicId, { force: true, reportError: true })} replyRequest={replyRequest} replyDraftSeed={replyDraftSeed?.postingId === selected.id ? replyDraftSeed : undefined} onContinueInAgent={(draft) => void continueReplyInAgent(selected, draft)} continueInAgentLabel={settings.helpers.enabled.includes("reply-coach") ? "Reply Coach" : "Continue in agent"} onClose={closeReader} onPrevious={() => moveThreadSelection(-1)} onNext={() => moveThreadSelection(1)} hasPrevious={hasPrevious} hasNext={hasNext} onOpenObject={(object) => void openAgentObject(object)} />}
             </>
               : active === "screener" ? <ScreenerView onNotice={(message) => setNotice({ message })} onOpenObject={(object) => void openAgentObject(object)} />

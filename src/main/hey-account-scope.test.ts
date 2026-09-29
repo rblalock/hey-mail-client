@@ -53,6 +53,73 @@ describe("shared native and Pi account guard", () => {
     expect(read).toHaveBeenCalledOnce();
     expect(read.mock.calls[0]![0]).toContain("imbox");
   });
+  it("shares one ownership lookup across concurrent text, HTML, and attachment reads", async () => {
+    const scope = create();
+    const read = vi.fn(async (args: string[]) => result(args.includes("feedbox") ? [{ id: 11, topic_id: 21, account_id: 101 }] : []));
+    await Promise.all([
+      scope.prepare(["thread", "read", "21", "--json"], read),
+      scope.prepare(["thread", "read", "21", "--html"], read),
+      scope.prepare(["attachment", "list", "21", "--json"], read),
+    ]);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls.map(([args]) => args[6])).toEqual(["imbox", "feedbox"]);
+  });
+  it("shares a failed lookup without trusting its ID, and permits a later verification retry", async () => {
+    const scope = create();
+    const failed = vi.fn(async () => { throw new Error("Unavailable"); });
+    const reads = await Promise.allSettled([
+      scope.prepare(["thread", "read", "21", "--json"], failed),
+      scope.prepare(["attachment", "list", "21", "--json"], failed),
+    ]);
+    expect(reads.every((read) => read.status === "rejected")).toBe(true);
+    expect(failed).toHaveBeenCalledOnce();
+    const retry = vi.fn(async () => result([{ id: 11, topic_id: 21, account_id: 101 }]));
+    await scope.prepare(["thread", "read", "21", "--json"], retry);
+    expect(retry).toHaveBeenCalledOnce();
+  });
+  it("does not share verification across different mail identifiers or profiles", async () => {
+    const scope = create();
+    const second = new HeyAccountScope("202", "https://app.hey.com");
+    const read = vi.fn(async (args: string[]) => result([{ id: 11, topic_id: 21, account_id: Number(args[1]) }]));
+    await Promise.all([
+      scope.prepare(["thread", "read", "21", "--json"], read),
+      scope.prepare(["seen", "11", "--json"], read),
+      second.prepare(["thread", "read", "21", "--json"], read),
+    ]);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+  it.each([undefined, 101])("learns an approved contact's clearance for future delivery, with account ID %s", async (accountId) => {
+    const scope = create();
+    const contactRead = vi.fn(async () => result([{ id: 51, account_id: 101 }]));
+    const show = ["contact", "show", "51", "--json"];
+    await scope.prepare(show, contactRead);
+    scope.learn(show, result({ id: 51, account_id: 101, clearance: { id: 91, status: "approved", ...(accountId ? { account_id: accountId } : {}) } }).stdout);
+    const read = vi.fn();
+    const approve = ["screener", "approve", "91", "--box", "feedbox", "--json"];
+    expect(await scope.prepare(approve, read)).toEqual(["--account", "101", "--base-url", "https://app.hey.com", ...approve]);
+    expect(read).not.toHaveBeenCalled();
+  });
+  it("does not learn a clearance from an unverified contact show result", async () => {
+    const scope = create();
+    scope.learn(["contact", "show", "51"], result({ id: 51, clearance: { id: 91, status: "approved" } }).stdout);
+    await expect(scope.prepare(["screener", "approve", "91", "--box", "feedbox"], async () => result([]))).rejects.toThrow("not been verified");
+  });
+  it.each([
+    { id: 52, clearance: { id: 91, status: "approved" } },
+    { id: 51, account_id: 202, clearance: { id: 91, status: "approved" } },
+    { id: 51, clearance: { id: 91, status: "approved", account_id: 202 } },
+  ])("rejects mismatched or cross-account contact clearances %j", async (data) => {
+    const scope = create();
+    scope.learn(["contact", "list"], result([{ id: 51, account_id: 101 }]).stdout);
+    expect(() => scope.learn(["contact", "show", "51"], result(data).stdout)).toThrow(/different contact|different account/);
+    await expect(scope.prepare(["screener", "approve", "91", "--box", "feedbox"], async () => result([]))).rejects.toThrow("not been verified");
+  });
+  it("keeps approval of arbitrary or unapproved clearances guarded", async () => {
+    const scope = create();
+    scope.learn(["contact", "list"], result([{ id: 51, account_id: 101 }]).stdout);
+    scope.learn(["contact", "show", "51"], result({ id: 51, clearance: { id: 91, status: "pending" } }).stdout);
+    for (const id of ["91", "92"]) await expect(scope.prepare(["screener", "approve", id, "--box", "feedbox"], async () => result([]))).rejects.toThrow("not been verified");
+  });
   it.each([
     ["-v", "42"],
     ["--count", "42"],

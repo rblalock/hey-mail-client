@@ -1,11 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listMailbox, mailboxCommand, mailboxListOptions, mutateMail, mutationCommand, parseImboxJson } from "./hey";
+import { getMailOverview, listMailbox, mailboxCommand, mailboxListOptions, mutateMail, mutationCommand, parseImboxJson } from "./hey";
 import { findExecutable, runFile } from "./profile-process";
 
 vi.mock("./profile-process", () => ({ findExecutable: vi.fn(async () => "/synthetic/hey"), runFile: vi.fn(), runFileWithInput: vi.fn() }));
 beforeEach(() => vi.clearAllMocks());
 
 describe("optional Imbox pagination", () => {
+  it("reads a bounded Reply Later overview head and labels partial totals", async () => {
+    vi.mocked(runFile).mockImplementation(async (_file, command) => ({ stdout: JSON.stringify({ ok: true, data: command[0] === "screener" ? { clearances: [] } : { next_page: "older", postings: [{ id: 1 }] } }), stderr: "" }));
+    expect((await getMailOverview()).replyLater).toMatchObject({ count: 1, partial: true });
+    expect(vi.mocked(runFile).mock.calls.every(([, command]) => !command.includes("--all"))).toBe(true);
+  });
+
+  it("reuses a supplied account mailbox read for the overview", async () => {
+    vi.mocked(runFile).mockResolvedValue({ stdout: JSON.stringify({ ok: true, data: { clearances: [] } }), stderr: "" });
+    const readLater = vi.fn(async () => ({ status: "ready" as const, boxKey: "laterbox" as const, boxName: "Reply Later", postings: [] }));
+    expect((await getMailOverview({}, readLater)).replyLater).toEqual({ count: 0 });
+    expect(readLater).toHaveBeenCalledOnce();
+    expect(runFile).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves complete listings by default and requests one untruncated server page when enabled", () => {
     expect(mailboxCommand("imbox")).toEqual(["box", "view", "imbox", "--all", "--json"]);
     expect(mailboxCommand("imbox", { paginated: true })).toEqual(["box", "view", "imbox", "--json"]);

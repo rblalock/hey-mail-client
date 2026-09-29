@@ -16,6 +16,7 @@ import { sidebarItemIcon, type SidebarIconKey } from "./sidebar-icons";
 
 type SidebarProps = {
   imboxCount: number;
+  imboxCountPartial?: boolean;
   active: string;
   chats: AgentChatLink[];
   activeChatId?: string;
@@ -63,7 +64,7 @@ const ROUTE_SHORTCUTS: Record<string, ShortcutId | undefined> = {
   "set-aside": "nav-aside", "bubble-up": "nav-bubble", screener: "nav-screener", calendar: "nav-calendar",
 };
 
-export default function Sidebar({ imboxCount, active, chats, activeChatId, collapsed, onNavigate, onCompose, onNewChat, onOpenChat, onArchiveChat, onToggleCollapsed, shortcuts }: SidebarProps) {
+export default function Sidebar({ imboxCount, imboxCountPartial, active, chats, activeChatId, collapsed, onNavigate, onCompose, onNewChat, onOpenChat, onArchiveChat, onToggleCollapsed, shortcuts }: SidebarProps) {
   const [sessionsExpanded, setSessionsExpanded] = useState(true);
   const [previewedItem, setPreviewedItem] = useState<SidebarIconKey>();
   const visibleChats = recentSessions(chats);
@@ -91,7 +92,7 @@ export default function Sidebar({ imboxCount, active, chats, activeChatId, colla
           </button>
           {MAIL_ITEMS.map(({ key, label }) => <button key={key} className="nav-row" data-active={active === key} type="button" data-tooltip={label} data-shortcut={display(ROUTE_SHORTCUTS[key])} data-tooltip-side="right" onPointerEnter={() => beginItemPreview(key, true)} onPointerLeave={() => endItemPreview(key)} onFocus={() => beginItemPreview(key, false)} onBlur={() => endItemPreview(key)} onClick={() => onNavigate(key)}>
             <span className="nav-icon"><MorphingIcon icon={sidebarItemIcon(key, active === key || previewedItem === key)} size={17} /></span><span className="sidebar-copy nav-label">{label}</span>
-            {key === "imbox" && imboxCount > 0 && <span className="sidebar-copy nav-count">{imboxCount}</span>}
+            {key === "imbox" && (imboxCount > 0 || imboxCountPartial) && <span className="sidebar-copy nav-count" title={imboxCountPartial ? `At least ${imboxCount} unread; more mail loads as you scroll` : undefined}>{imboxCountPartial ? imboxCount > 0 ? `${imboxCount}+` : "…" : imboxCount}</span>}
           </button>)}
         </nav>
 

@@ -51,7 +51,7 @@ export function mergeSplitPage(current: MailboxCache, page: MailSplitPage, repla
   return next;
 }
 
-type State = { key: string; mailboxes: MailboxCache; nextPage?: string; loading: boolean; loadingMore: boolean; error?: string };
+type State = { key: string; mailboxes: MailboxCache; nextPage?: string; headComplete?: boolean; membershipLoading?: boolean; membershipError?: string; loading: boolean; loadingMore: boolean; error?: string };
 type Source = Pick<HeyAgentApi["mail"], "listSplitMail" | "subscribe">;
 type CacheOptions = { maxSessions?: number; staleAfterMs?: number; now?: () => number };
 const empty = (key: string): State => ({ key, mailboxes: {}, loading: false, loadingMore: false });
@@ -78,6 +78,10 @@ export class SplitMailSession {
   private resumeHistory = false;
   private resetScheduled = false;
   private restartRequired = false;
+  private preservedHistory?: { nextPage?: string };
+  private transientRetries = 0;
+  private seenRevision = 0;
+  private seenOverrides = new Map<string, { seen: boolean; revision: number }>();
   private timer?: ReturnType<typeof setTimeout>;
   private unsubscribe?: () => void;
   private onChange?: (state: State) => void;
@@ -95,7 +99,7 @@ export class SplitMailSession {
     this.unsubscribe ??= this.source.subscribe(this.changed);
     const expired = (this.options.now?.() ?? Date.now()) - this.refreshedAt >= (this.options.staleAfterMs ?? STALE_AFTER_MS);
     if (!this.pending && (!this.loaded || this.stale || expired)) void this.refresh();
-    else if (!this.pending && this.resumeHistory && this.state.nextPage) void this.read(true);
+    else if (!this.pending && (this.resumeHistory || this.state.headComplete === false) && this.state.nextPage) void this.read(true);
   }
 
   /** Switching tabs retains rows, cursors, and any already-started request. */
@@ -117,13 +121,20 @@ export class SplitMailSession {
 
   private update(change: Partial<State>): void { this.state = { ...this.state, ...change }; this.onChange?.(this.state); }
   private invalidate(): void {
-    this.resumeHistory ||= this.state.loadingMore && Boolean(this.state.nextPage);
+    this.resumeHistory ||= this.state.loadingMore && this.state.headComplete !== false && Boolean(this.state.nextPage);
     this.generation++;
     this.pending = false;
   }
 
   private changed = (change: MailWatchChange): void => {
-    if (this.stopped || change.change === "disconnected") return;
+    if (this.stopped || change.change === "disconnected" || change.change === "ready") return;
+    if (change.metadataOnly) {
+      if (change.postingId && typeof change.postingSeen === "boolean") this.rememberSeen([change.postingId], change.postingSeen);
+      this.update({ mailboxes: applyWatchSeen(this.state.mailboxes, change) });
+      return;
+    }
+    if (change.postingId) this.seenOverrides.delete(change.postingId);
+    else this.seenOverrides.clear();
     // Invalidate now: an old page must not resurrect mail during the debounce.
     this.invalidate();
     this.stale = true;
@@ -152,40 +163,62 @@ export class SplitMailSession {
       this.resumeHistory = false;
       this.headIds = {};
       this.cursors.clear();
+      this.preservedHistory = undefined;
     }
     // Preserve the next unread cursor (including exhaustion) with retained history.
     const preserveContinuation = !more && !reset && this.historyLoaded;
+    if (preserveContinuation) this.preservedHistory ??= { nextPage: this.state.nextPage };
+    const historyPage = more && this.state.headComplete !== false;
     if (more) this.resumeHistory = false;
     if (!more && !preserveContinuation) this.cursors.clear();
     this.update({ loading: !more && !this.loaded, loadingMore: more, error: undefined });
     let received = false;
     try {
-      const result = reset
+      let seenAtRequest = this.seenRevision;
+      let result = reset
         ? await this.source.listSplitMail(this.id, undefined, { refresh: true })
         : await this.source.listSplitMail(this.id, page);
-      if (version !== this.generation || this.stopped) return;
-      if (!preserveContinuation && result.nextPage && (result.nextPage === page || this.cursors.has(result.nextPage))) throw new Error(repeatedPage);
-      if (reset || !this.loaded) this.restartRequired = false;
-      if (page) this.cursors.add(page);
-      const replace = more || reset ? {} : this.headIds;
-      this.update({
-        mailboxes: mergeSplitPage(reset ? {} : this.state.mailboxes, result, replace, !more),
-        nextPage: preserveContinuation ? this.state.nextPage : result.nextPage,
-        loading: false, loadingMore: false,
-      });
-      if (more) this.historyLoaded = true;
-      else {
-        this.headIds = Object.fromEntries(Object.values(result.mailboxes).filter((box) => box !== undefined)
-          .map((box) => [box.boxKey, new Set(box.postings.map((row) => row.id))]));
-        this.refreshedAt = this.options.now?.() ?? Date.now();
-        this.stale = false;
-        this.loaded = true;
+      let responsePage = page;
+      for (let heads = 0; ; heads++) {
+        if (version !== this.generation || this.stopped) return;
+        if (result.nextPage && (result.nextPage === responsePage || this.cursors.has(result.nextPage))) throw new Error(repeatedPage);
+        if (reset || !this.loaded) this.restartRequired = false;
+        if (responsePage) this.cursors.add(responsePage);
+        const replace = historyPage || reset ? {} : Object.fromEntries(Object.keys(result.mailboxes).map((box) => [box, this.headIds[box as MailboxKey]]));
+        const headComplete = result.headComplete !== false;
+        const nextPage = headComplete && this.preservedHistory ? this.preservedHistory.nextPage : result.nextPage;
+        const incoming = { ...result, mailboxes: Object.fromEntries(Object.entries(result.mailboxes).map(([key, box]) => [key, box && { ...box, postings: box.postings.map((row) => {
+          const override = this.seenOverrides.get(row.id);
+          return override && override.revision > seenAtRequest ? { ...row, seen: override.seen } : row;
+        }) }])) };
+        const mailboxes = mergeSplitPage(reset && heads === 0 ? {} : this.state.mailboxes, incoming, replace, !historyPage);
+        this.update({ mailboxes, nextPage, headComplete, membershipLoading: result.membershipLoading, membershipError: result.membershipError, loading: false, loadingMore: !headComplete });
+        if (headComplete) this.preservedHistory = undefined;
+        if (historyPage) this.historyLoaded = true;
+        else {
+          for (const box of Object.values(result.mailboxes)) if (box) this.headIds[box.boxKey] = new Set(box.postings.map((row) => row.id));
+          this.refreshedAt = this.options.now?.() ?? Date.now();
+          this.stale = false;
+          this.loaded = true;
+        }
+        received = true;
+        this.transientRetries = 0;
+        if (headComplete || !result.nextPage || !this.active) break;
+        // Protocol protection: six source heads need at most two batches.
+        if (heads >= 2) throw new Error("Split mailbox heads did not finish loading. Refresh to continue.");
+        responsePage = result.nextPage;
+        seenAtRequest = this.seenRevision;
+        result = await this.source.listSplitMail(this.id, responsePage);
       }
-      received = true;
     } catch (reason) {
       if (version === this.generation && !this.stopped) {
         const message = reason instanceof Error ? reason.message : "Could not load this split. Try again.";
         const underlying = message.replace(/^Error invoking remote method 'mail:list-split-mail': Error: /, "");
+        if (underlying === "Mail changed while loading this split. Refresh to continue." && this.transientRetries++ < 2 && this.active) {
+          this.update({ loading: !this.loaded, loadingMore: false });
+          this.timer = setTimeout(() => { this.timer = undefined; void this.refresh(); }, 300);
+          return;
+        }
         if (more && expiredPageErrors.has(underlying)) this.restartRequired = true;
         this.update({ loading: false, loadingMore: false, error: message });
       }
@@ -201,10 +234,21 @@ export class SplitMailSession {
 
   apply = (request: MailMutationRequest): void => {
     if (!this.id || this.stopped) return;
+    if (request.operation === "seen" || request.operation === "unseen") {
+      this.rememberSeen(request.postingIds, request.operation === "seen");
+      this.update({ mailboxes: applyOptimisticMailMutation(this.state.mailboxes, request.sourceBox ?? "imbox", undefined, request).mailboxes });
+      return;
+    }
     this.invalidate();
     this.stale = true;
     this.update({ mailboxes: applyOptimisticMailMutation(this.state.mailboxes, request.sourceBox ?? "imbox", undefined, request).mailboxes, loading: false, loadingMore: false });
   };
+
+  private rememberSeen(ids: readonly string[], seen: boolean): void {
+    const revision = ++this.seenRevision;
+    for (const id of ids) { this.seenOverrides.delete(id); this.seenOverrides.set(id, { seen, revision }); }
+    while (this.seenOverrides.size > 5_000) this.seenOverrides.delete(this.seenOverrides.keys().next().value!);
+  }
 
   refresh = (reset = false): Promise<void> => {
     clearTimeout(this.timer);

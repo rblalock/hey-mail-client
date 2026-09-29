@@ -17,6 +17,7 @@ import { isCalendarSearchRequest, searchCalendar } from "./hey-calendar-search";
 import { completeCalendarHabit, completeCalendarTodo, createCalendarTimeCategory, createCalendarTodo, currentCalendarTimeTrack, deleteCalendarHabit, deleteCalendarTimeCategory, deleteCalendarTimeTrack, deleteCalendarTodo, exportCalendarTimeTracks, isCalendarHabitCompletionRequest, isCalendarHabitWriteRequest, isCalendarJournalWriteRequest, isCalendarTimeCategoryTitle, isCalendarTimeStopRequest, isCalendarTimeTrackUpdateRequest, isCalendarTodoCompletionRequest, isCalendarTodoCreateRequest, listCalendarHabits, listCalendarJournal, listCalendarTimeCategories, listCalendarTimeTracks, listCalendarTodos, readCalendarJournal, renameCalendarTimeCategory, startCalendarTimeTrack, stopCalendarTimeTrack, updateCalendarTimeTrack, writeCalendarHabit, writeCalendarJournal } from "./hey-calendar-recordings";
 import { decideScreener, deleteDraft, editDraft, getMailOrganization, getMailOverview, getReplyContext, listContactThreads, listDrafts, listImbox, listLibrary, listMailbox, listScreener, listSearchFilters, mutateMail, previewBulkReply, readBundle, readLibrarySource, readThread, searchMail, sendBulkReply, sendDraft, sendMail, showContact, showDraft, unbundleContact, undoBulkReply, updateMailOrganization, updateSetAsideGroup } from "./hey";
 import { HeyWatcher } from "./hey-watch";
+import { MailChangeTracker } from "./mail-change-tracker";
 import { mailboxListOptions } from "./hey";
 import { completionState } from "./mail-completion";
 import { resolveAppPaths } from "./paths";
@@ -64,7 +65,7 @@ app.on("second-instance", () => {
 });
 const settingsStore = new SettingsStore(join(paths.config, "settings.json"));
 const mailDiskCache = new MailDiskCache(paths.mailCache);
-const cachedMailReader = new CachedMailReader(mailDiskCache, (topicId) => readThread(topicId, process.env, { includeHtml: true }));
+const cachedMailReader = new CachedMailReader(mailDiskCache, (topicId, onPreview) => readThread(topicId, process.env, { includeHtml: true, onPreview }));
 async function configureMailCache(settings: AppSettings): Promise<AppSettings> {
   await mailDiskCache.configure({ enabled: settings.mailCache.enabled, maxBytes: settings.mailCache.maxSizeMb * 1024 * 1024, retentionMs: settings.mailCache.retentionDays * 86_400_000 });
   return settings;
@@ -102,6 +103,7 @@ function bindProfile(): void {
   const profile = profiles.state.active;
   if (!profile) { accountContext = undefined; return; }
   const token = profiles.state.token;
+  const mailChanges = new MailChangeTracker();
   const directories = profiles.directories(profile.key);
   const env = { ...process.env, HEY_ACCOUNT_ID: profile.accountId, HEY_BASE_URL: profile.server, HEY_NONINTERACTIVE: "1", HEY_AGENT_ACCOUNT_ID: profile.accountId, HEY_AGENT_ACCOUNT_SERVER: profile.server, HEY_AGENT_WRITE_RECEIPTS: join(directories.state, "pending-writes") };
   accountContext = { scope: new HeyAccountScope(profile.accountId, profile.server), env };
@@ -112,19 +114,20 @@ function bindProfile(): void {
       if (pendingHeyWrites(env.HEY_AGENT_WRITE_RECEIPTS).length) throw new Error("A HEY change needs checking before split labels can continue. Verify it in HEY, then acknowledge it in the account menu.");
       pendingWrites++;
       try { return await task(); } finally { pendingWrites--; }
-    }, profile.email);
+    }, profile.email, (result) => mailChanges.observe(result));
   void splitRuntime.refresh();
   agent = new AgentSessionManager(directories.workspace, new ChatStore(join(directories.state, "chats.json")), env, piExtensionPath, helperRoot);
   const profileAgent = agent;
   handoffs = new AgentHandoffs(profile, (tabId) => profileAgent.handoffSnapshot(tabId), env);
   agent.subscribe((workspace) => { if (profiles.state.token === token) mainWindow?.webContents.send("agent:changed", workspace); });
-  heyWatcher = new HeyWatcher((change) => {
+  heyWatcher = new HeyWatcher((incoming) => {
     if (profiles.state.token !== token) return;
+    const change = mailChanges.classify(incoming);
     // Invalidate before the renderer can start a replacement fetch. In-flight
     // requests from before this event cannot repopulate the disk cache.
-    if (change.topicId) void mailDiskCache.remove(profile, change.topicId).catch(() => undefined);
+    if (change.topicId && !change.metadataOnly) void mailDiskCache.remove(profile, change.topicId).catch(() => undefined);
     else if (change.change === "resync" || change.change === "deleted") void mailDiskCache.clearProfile(profile).catch(() => undefined);
-    if (!change.box || ["imbox", "feedbox", "trailbox", "asidebox", "laterbox", "bubblebox"].includes(change.box.key)) splitRuntime?.schedule();
+    splitRuntime?.noteChange(change);
     mainWindow?.webContents.send("mail:changed", change);
   }, env);
   void heyWatcher.start();
@@ -223,7 +226,7 @@ function registerIpc(): void {
       if (page !== undefined) throw new Error("Refresh the split before loading older mail.");
       splitRuntime!.invalidate();
     }
-    return splitRuntime!.listMail(id, page);
+    return splitRuntime!.listMail(id, page, { progressive: true });
   });
   handle("mail:add-to-split", (_event, request) => splitRuntime!.addToSplit(request));
   handle("mail:refresh-splits", async () => {
@@ -234,7 +237,9 @@ function registerIpc(): void {
   handle("mail:list-mailbox", async (_event, box, options) => {
     if (typeof box !== "string") throw new Error("A HEY mailbox is required.");
     const runtime = splitRuntime;
-    const result = await listMailbox(box as MailboxKey, process.env, mailboxListOptions(options));
+    const result = runtime
+      ? await runtime.listMailbox(box as MailboxKey, mailboxListOptions(options))
+      : await listMailbox(box as MailboxKey, process.env, mailboxListOptions(options));
     runtime?.observe(box as MailboxKey, result);
     return result;
   });
@@ -258,7 +263,10 @@ function registerIpc(): void {
     }
   });
   handle("mail:list-screener", () => listScreener());
-  handle("mail:get-overview", () => getMailOverview());
+  handle("mail:get-overview", () => {
+    const runtime = splitRuntime;
+    return getMailOverview(process.env, runtime ? () => runtime.listMailbox("laterbox", { paginated: true, singlePage: true }) : undefined);
+  });
   handle("mail:list-library", (_event, kind) => {
     if (kind !== "contacts" && kind !== "labels" && kind !== "collections") throw new Error("Invalid HEY library.");
     return listLibrary(kind as MailLibraryKind);
@@ -292,8 +300,12 @@ function registerIpc(): void {
     if (!isScreenerDecision(request)) throw new Error("Invalid Screener decision.");
     return decideScreener(request);
   });
-  handle("mail:read-thread", (_event, topicId) => {
-    return cachedMailReader.read(profiles.state.active!, assertNumericId(topicId, "topic"));
+  handle("mail:read-thread", (_event, topicId, requestId) => {
+    if (requestId !== undefined && (typeof requestId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(requestId))) throw new Error("Invalid mail read request.");
+    const token = profiles.state.token;
+    return cachedMailReader.read(profiles.state.active!, assertNumericId(topicId, "topic"), requestId ? (thread) => {
+      if (profiles.state.token === token) mainWindow?.webContents.send("mail:thread-preview", token, { requestId, thread });
+    } : undefined);
   });
   handle("mail:read-cached-thread", (_event, topicId) => cachedMailReader.cached(profiles.state.active!, assertNumericId(topicId, "topic")));
   handle("mail:open-attachment", async (_event, topicId, attachmentId) => {
@@ -320,6 +332,11 @@ function registerIpc(): void {
   handle("mail:mutate", async (_event, request) => {
     if (!isMailMutation(request)) throw new Error("Invalid HEY mail action.");
     const runtime = splitRuntime;
+    if (request.operation === "seen" || request.operation === "unseen") {
+      const result = await mutateMail(request);
+      runtime?.applySeen(request.postingIds, request.operation === "seen");
+      return result;
+    }
     runtime?.invalidate();
     runtime?.store.forget(request.postingIds);
     const result = await mutateMail(request).finally(() => runtime?.schedule());

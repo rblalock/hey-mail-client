@@ -20,6 +20,36 @@ function render(result: ImboxResult, showSenderAvatars = false, bulkSelectedIds:
 const imbox = (postings: ImboxPosting[]): ImboxResult => ({ status: "ready", boxKey: "imbox", boxName: "Imbox", postings });
 
 describe("Imbox section presentation", () => {
+  it("offers an automatic paging sentinel for every native mailbox and labels partial counts", () => {
+    for (const boxKey of ["imbox", "feedbox", "trailbox", "asidebox", "laterbox", "bubblebox"] as const) {
+      const $ = render({ ...imbox([row("first", false)]), boxKey, nextPage: "older" }, false, [], { onLoadMore: noop });
+      expect($(".sectioned-imbox-sentinel")).toHaveLength(1);
+      expect($("button").filter((_, element) => /load more/i.test($(element).text()))).toHaveLength(0);
+      if (boxKey !== "imbox") expect($(".title-count").text()).toBe("1+");
+    }
+  });
+
+  it("keeps saved-section paging accessible with Previously Seen collapsed", () => {
+    vi.stubGlobal("window", { localStorage: { getItem: () => JSON.stringify(["previouslySeen"]) } });
+    const $ = render({ ...imbox([row("active", false)]), nextPage: "later-cursor" }, false, [], { sectioned: true, hasSectionPages: true, onLoadMore: noop });
+    expect($(".sectioned-imbox-sentinel")).toHaveLength(1);
+    expect($("[data-section=previouslySeen] .sectioned-imbox-sentinel")).toHaveLength(0);
+  });
+
+  it("does not present an incomplete linked label as an empty split", () => {
+    const result = imbox([]);
+    const $ = render(result, false, [], { accountSplit: true, sectionMailboxes: { imbox: result }, membershipLoading: true });
+    expect($("[role=status]").text()).toContain("Loading linked label");
+    expect($("[data-section=active]").text()).toContain("Checking linked label");
+    expect($("[data-section=active]").text()).not.toContain("Nothing is asking");
+  });
+
+  it("describes the bounded Reply Later overview as a lower bound", () => {
+    const $ = render(imbox([row("active", false)]), false, [], { overview: { screener: { status: "ready", entries: [] }, replyLater: { count: 25, partial: true } } });
+    expect($(".imbox-reply-later button").attr("data-tooltip")).toBe("Open at least 25 Reply Later conversations");
+    expect($(".reply-later-copy small").text()).toBe("25+ conversations");
+  });
+
   afterEach(() => vi.unstubAllGlobals());
   it("shows outgoing addressing, a readable thread count, and the sender's avatar", () => {
     vi.stubGlobal("window", { heyAgent: { profiles: { current: { active: { email: "alex@example.test" } } } } });
@@ -142,6 +172,12 @@ describe("Imbox section presentation", () => {
     expect($("[data-section=active] .sectioned-imbox-heading em").text()).toBe("1");
     expect($("[data-section=bubbledUp] .sectioned-imbox-heading em").text()).toBe("1");
     expect($("[data-section=previouslySeen] .sectioned-imbox-heading em").text()).toBe("1 shown");
+  });
+
+  it("marks pending counts as partial until the Imbox history boundary is present", () => {
+    const $ = render({ ...imbox([row("active", false), row("due", false, true)]), nextPage: "pending-more" }, false, [], { sectioned: true });
+    expect($("[data-section=active] .sectioned-imbox-heading em").text()).toBe("1+");
+    expect($("[data-section=bubbledUp] .sectioned-imbox-heading em").text()).toBe("1+");
   });
 
   it("only references an active descendant that is actually visible", () => {

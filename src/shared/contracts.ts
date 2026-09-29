@@ -35,6 +35,7 @@ export type MailContact = {
 };
 
 export type ImboxPosting = {
+  contentVersion?: string;
   id: string;
   topicId?: string;
   /** Renderer grouping provenance; identifies the source without moving server mail. */
@@ -277,7 +278,7 @@ export type ImboxResult = {
   detail?: string;
 };
 
-export type MailboxListOptions = { page?: string; paginated?: boolean; singlePage?: boolean };
+export type MailboxListOptions = { page?: string; paginated?: boolean; singlePage?: boolean; refresh?: boolean };
 
 export type MailThreadListing = {
   kind: "bundle" | "contact";
@@ -381,6 +382,8 @@ export type MailReplyContext = {
 };
 
 export type MailWatchChange = {
+  contentVersion?: string;
+  metadataOnly?: boolean;
   change: "ready" | "disconnected" | "added" | "updated" | "deleted" | "resync";
   at?: string;
   box?: { id: string; key: string; name: string };
@@ -469,6 +472,7 @@ export type ScreenerResult = {
 export type MailOverview = {
   screener: ScreenerResult;
   replyLater: {
+    partial?: boolean;
     count: number;
     latest?: ImboxPosting;
   };
@@ -647,8 +651,13 @@ export type MailThread = {
   topicId: string;
   subject: string;
   entries: ThreadEntry[];
+  bodyLoading?: boolean;
+  bodyError?: string;
+  attachmentsLoading?: boolean;
   attachmentsError?: string;
 };
+
+export type MailThreadPreview = { requestId: string; thread: MailThread };
 
 export type ThemeSnapshot = {
   name: string;
@@ -958,7 +967,8 @@ export type HeyAgentApi = {
     sendDraft(id: string): Promise<{ message: string }>;
     deleteDraft(id: string): Promise<{ message: string }>;
     getReplyContext(postingId: string): Promise<MailReplyContext>;
-    readThread(topicId: string): Promise<MailThread>;
+    readThread(topicId: string, requestId?: string): Promise<MailThread>;
+    subscribeThreadPreview(listener: (preview: MailThreadPreview) => void): () => void;
     readCachedThread(topicId: string): Promise<MailThread | undefined>;
     openAttachment(topicId: string, attachmentId: string): Promise<void>;
     previewCalendarInvite(topicId: string, attachmentId: string): Promise<MailCalendarInvite>;

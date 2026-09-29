@@ -51,6 +51,12 @@ export class MailSplits {
     return this.snapshot();
   }
 
+  /** Display may show rule matches while the complete, write-safe label read runs. */
+  hasLoadedMembership(id: string): boolean {
+    const split = this.splits.find((split) => split.id === id);
+    return Boolean(split && (!split.labelId || this.labels.has(split.labelId)));
+  }
+
   async save(value: unknown): Promise<MailSplitState> {
     const draft = normalizeMailSplitDraft(value);
     await this.ready;

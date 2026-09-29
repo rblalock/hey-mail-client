@@ -48,7 +48,8 @@ function contact(value: unknown): MailContact | undefined {
 function validatedThread(value: unknown): MailThread | undefined {
   const source = record(value);
   if (!source || typeof source.topicId !== "string" || !ID.test(source.topicId) || typeof source.subject !== "string"
-    || source.attachmentsError !== undefined || !Array.isArray(source.entries) || source.entries.length === 0) return undefined;
+    || source.attachmentsError !== undefined || source.bodyError !== undefined || source.bodyLoading === true || source.attachmentsLoading === true
+    || !Array.isArray(source.entries) || source.entries.length === 0) return undefined;
   const entries: ThreadEntry[] = [];
   for (const item of source.entries) {
     const entry = record(item);
@@ -109,6 +110,7 @@ export class MailDiskCache {
   private policy: MailDiskCachePolicy;
   private queue: Promise<unknown> = Promise.resolve();
   private epoch = 0;
+  private topicEpochs = new Map<string, number>();
   private configured = false;
   private index?: Map<string, CacheFile>;
   private readonly root: string;
@@ -119,8 +121,14 @@ export class MailDiskCache {
     this.policy = policyCopy(policy);
   }
 
-  /** Capture this BEFORE a network request; pass it back to write after the result is verified. */
+  /** Changes to the overall cache policy invalidate every outstanding request. */
   get generation(): number { return this.epoch; }
+
+  /** Capture BEFORE a network request; unrelated thread changes do not expire it. */
+  token(profile: MailDiskCacheProfile, topicId: string): string {
+    const key = `${profile.key}:${topicId}`;
+    return `${this.epoch}:${this.topicEpochs.get(key) ?? 0}:${key}`;
+  }
 
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.queue.then(operation);
@@ -198,6 +206,7 @@ export class MailDiskCache {
     this.configured = true;
     this.policy = next;
     this.epoch++;
+    this.topicEpochs.clear();
     return this.serial(async () => {
       if (initial) this.index = undefined;
       if (next.enabled) await this.prune();
@@ -206,9 +215,9 @@ export class MailDiskCache {
   }
 
   read(profile: MailDiskCacheProfile, topicId: string): Promise<CachedMailThread | undefined> {
-    const generation = this.epoch;
+    const generation = this.token(profile, topicId);
     return this.serial(async () => {
-      if (!this.policy.enabled || generation !== this.epoch) return undefined;
+      if (!this.policy.enabled || generation !== this.token(profile, topicId)) return undefined;
       try {
         const key = profileKey(profile);
         if (!ID.test(topicId) || !await this.directory()) return undefined;
@@ -229,9 +238,9 @@ export class MailDiskCache {
           if (!envelope || envelope.version !== 1 || envelope.profileKey !== key || envelope.server !== profile.server
             || envelope.accountId !== profile.accountId || !Number.isSafeInteger(envelope.cachedAt)
             || (envelope.cachedAt as number) > now || now - (envelope.cachedAt as number) >= this.policy.retentionMs || thread?.topicId !== topicId) return undefined;
-          if (generation !== this.epoch || !this.policy.enabled) return undefined;
+          if (generation !== this.token(profile, topicId) || !this.policy.enabled) return undefined;
           await file.utimes(new Date(now), info.mtime);
-          if (generation !== this.epoch || !this.policy.enabled) return undefined;
+          if (generation !== this.token(profile, topicId) || !this.policy.enabled) return undefined;
           index.set(name, { name, bytes: info.size, cachedAt: info.mtimeMs, accessedAt: now });
           return { thread, cachedAt: envelope.cachedAt as number };
         } finally { await file.close(); }
@@ -239,9 +248,9 @@ export class MailDiskCache {
     });
   }
 
-  write(profile: MailDiskCacheProfile, thread: MailThread, generation: number): Promise<boolean> {
+  write(profile: MailDiskCacheProfile, thread: MailThread, generation: string): Promise<boolean> {
     return this.serial(async () => {
-      if (!this.policy.enabled || generation !== this.epoch) return false;
+      if (!this.policy.enabled || generation !== this.token(profile, thread.topicId)) return false;
       let temporary: string | undefined;
       try {
         const key = profileKey(profile);
@@ -261,14 +270,14 @@ export class MailDiskCache {
           await file.writeFile(data, "utf8");
           await file.utimes(new Date(cachedAt), new Date(cachedAt));
         } finally { await file.close(); }
-        // clear/configure/remove advance the epoch synchronously, including during the awaited write.
-        if (!this.policy.enabled || generation !== this.epoch) return false;
+        // Invalidation advances the token synchronously, including during awaited writes.
+        if (!this.policy.enabled || generation !== this.token(profile, thread.topicId)) return false;
         await this.directory();
         await rename(temporary, path);
         temporary = undefined;
         index.set(name, { name, bytes, cachedAt, accessedAt: cachedAt });
         await this.prune();
-        return generation === this.epoch && this.policy.enabled;
+        return generation === this.token(profile, thread.topicId) && this.policy.enabled;
       } catch { return false; }
       finally { if (temporary) await unlink(temporary).catch(() => undefined); }
     });
@@ -277,7 +286,8 @@ export class MailDiskCache {
   remove(profile: MailDiskCacheProfile, topicId: string): Promise<void> {
     const key = profileKey(profile);
     if (!ID.test(topicId)) return Promise.reject(new Error("Invalid mail cache topic ID."));
-    this.epoch++;
+    const topicKey = `${key}:${topicId}`;
+    this.topicEpochs.set(topicKey, (this.topicEpochs.get(topicKey) ?? 0) + 1);
     return this.serial(async () => {
       if (!await this.directory()) return;
       await this.removeFile(`${key}-${topicId}.json`);
@@ -300,12 +310,14 @@ export class MailDiskCache {
 
   clear(): Promise<void> {
     this.epoch++;
+    this.topicEpochs.clear();
     return this.serial(() => this.clearFiles());
   }
 
   clearProfile(profile: MailDiskCacheProfile): Promise<void> {
     const key = profileKey(profile);
     this.epoch++;
+    this.topicEpochs.clear();
     return this.serial(() => this.clearFiles(key));
   }
 
